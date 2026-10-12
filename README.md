@@ -99,6 +99,10 @@ npm run build
 
 Browser tests use installed Microsoft Edge, a deterministic local dev server on port 5174, and isolated browser storage. Set `PLAYWRIGHT_CHANNEL` or edit `playwright.config.ts` for another installed browser. Test artifacts go to `test-results/`. See [VALIDATION.md](VALIDATION.md) for measured results and coverage.
 
+With the dev server running, benchmark a local Gaussian scan using `node scripts/benchmark-scan.mjs "D:/Desktop/mudaac.ply"`. Optional studio URLs after the path compare separate checkouts. The script measures actual animation-frame timing during orbit, lens-shift edits and projector dragging, serving the scan only over localhost and writing JSON and screenshots to `test-results/`.
+
+Add `--starts --isolated` to measure the first second of repeated camera/projector drags at DPR 2, alongside steady-state timing. This starts a temporary server with hot reload disabled and verifies that the viewport actually renders throughout each measurement.
+
 ## Source layout
 
 - `src/lib/types.ts`, `store.ts`: serializable document, editor state and command history.
