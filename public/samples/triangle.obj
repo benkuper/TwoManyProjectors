@@ -1,0 +1,10 @@
+mtllib triangle.mtl
+o Triangle
+v -1 1 0
+v 1 1 0
+v 0 3 0
+vt 0 0
+vt 1 0
+vt .5 1
+usemtl screen
+f 1/1 2/2 3/3
