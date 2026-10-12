@@ -53,6 +53,10 @@ interface RuntimeNode {
   key: string
   materialKey: string
   ownedGeometry: boolean
+  splat?: {
+    mesh: SplatMesh
+    uniforms: ReturnType<ProjectionSystem['splatUniforms']>
+  }
 }
 function layers(object: Object3D, layer: number) {
   object.traverse((o) => o.layers.set(layer))
@@ -109,6 +113,8 @@ export class ViewportEngine {
   calibrationKey = ''
   spark: SparkRenderer
   dirtyDepth = true
+  dirtySplats = true
+  depthTileKeys: string[] = []
   state: EditorState = get(editor)
   unsubscribe: () => void
   depthKey = ''
@@ -122,7 +128,8 @@ export class ViewportEngine {
   manipulationMode: 'translate' | 'rotate' | 'scale' = 'translate'
   pointerManipulated = false
   manipulating = false
-  previewRatio = 1
+  previewRatio = Math.min(1, window.devicePixelRatio)
+  splatPixelSize = 2
   slowFrames = 0
   disposed = false
   fpsFrames = 0
@@ -162,7 +169,14 @@ export class ViewportEngine {
     const ambient = new AmbientLight('#ffffff', 1)
     scene.add(ambient)
     this.helpers.add(this.calibrationHelpers)
-    this.spark = new SparkRenderer({ renderer, onDirty: invalidate })
+    this.spark = new SparkRenderer({
+      renderer,
+      onDirty: invalidate,
+      lodSplatScale: 0.4,
+      // Picking uses our BVH proxy; Spark's separate raycast LOD is unused.
+      lodRaycast: 0
+    })
+    this.setRenderRatio(Math.min(1.75, window.devicePixelRatio))
     scene.add(this.spark)
     this.controls.addEventListener('change', this.onCamera)
     this.controls.addEventListener('start', this.lowQuality)
@@ -274,17 +288,30 @@ export class ViewportEngine {
     this.controlsChanged(this.controls)
   }
   onCamera = () => this.invalidate()
+  onProjectionChange = () => {
+    this.dirtySplats = true
+    this.invalidate()
+  }
   lowQuality = () => {
+    if (this.manipulating) return
     this.manipulating = true
-    this.previewRatio = Math.min(1, window.devicePixelRatio)
     this.slowFrames = 0
-    this.renderer.setPixelRatio(this.previewRatio)
+    this.setRenderRatio(Math.min(this.previewRatio, window.devicePixelRatio))
     this.invalidate()
   }
   fullQuality = () => {
     this.manipulating = false
-    this.renderer.setPixelRatio(Math.min(1.75, window.devicePixelRatio))
+    this.setRenderRatio(Math.min(1.75, window.devicePixelRatio))
     this.invalidate()
+  }
+  setRenderRatio(ratio: number) {
+    // Keep the scan's LOD in CSS pixels across raster-resolution changes.
+    // Rebuilding a full-detail mapping on release left it on screen for hundreds
+    // of milliseconds on the next drag, waiting for a new mapping and sort.
+    // Retain the working splat budget and learned preview quality between drags.
+    this.spark.lodRenderScale = this.splatPixelSize * ratio
+    // Even setting the same ratio resizes Three's canvas/drawing buffer.
+    if (this.renderer.getPixelRatio() !== ratio) this.renderer.setPixelRatio(ratio)
   }
   contextMenu = (e: Event) => e.preventDefault()
   contextLost = (e: Event) => {
@@ -297,6 +324,7 @@ export class ViewportEngine {
   }
   contextRestored = () => {
     this.dirtyDepth = true
+    this.depthTileKeys = []
     this.projection.media.needsUpdate = true
     updateUI({ contextLost: false, error: '', notice: 'Graphics context restored' })
     this.invalidate()
@@ -423,6 +451,7 @@ export class ViewportEngine {
     group.userData.nodeId = node.id
     let root: Object3D,
       ownedGeometry = !node.assetId
+    let splatRuntime: RuntimeNode['splat']
     const asset = node.assetId ? runtimeAssets.get(node.assetId) : null
     if (asset) {
       const originalSplat = asset.root.children.find((o) => o instanceof SplatMesh) as
@@ -431,13 +460,17 @@ export class ViewportEngine {
         root = new Group()
         root.rotation.copy(asset.root.rotation)
         root.scale.copy(asset.root.scale)
+        const uniforms = this.projection.splatUniforms(node.material, node.gaussian?.size ?? 1)
         const splat = new SplatMesh({
           packedSplats: originalSplat.packedSplats,
           splatEncoding: originalSplat.packedSplats?.splatEncoding,
           extSplats: originalSplat.extSplats ?? false,
-          lod: false,
-          raycastable: false
+          enableLod: true,
+          editable: false,
+          raycastable: false,
+          worldModifier: this.projection.splatModifier(node.material, uniforms)
         })
+        splatRuntime = { mesh: splat, uniforms }
         splat.userData.sharedSource = true
         root.add(splat)
         if (asset.proxy) {
@@ -487,7 +520,8 @@ export class ViewportEngine {
       depth,
       key: JSON.stringify([node.kind, node.assetId, node.dimensions, asset?.root.uuid]),
       materialKey: '',
-      ownedGeometry
+      ownedGeometry,
+      splat: splatRuntime
     }
   }
   sync() {
@@ -541,11 +575,28 @@ export class ViewportEngine {
               o.geometry.hasAttribute('color')
             )
             o.userData.projected = true
-          } else if (o instanceof SplatMesh) {
-            o.worldModifiers = [this.projection.splatModifier(node.material)]
-            o.updateGenerator()
           }
         })
+      }
+      if (runtime.splat) {
+        const { mesh, uniforms } = runtime.splat,
+          size = node.gaussian?.size ?? 1,
+          opacity = node.gaussian?.opacity ?? 1,
+          color = new Color(node.material.color)
+        if (
+          uniforms.tmpSplatSize.value !== size ||
+          mesh.opacity !== opacity ||
+          !uniforms.tmpSplatBase.value.equals(color) ||
+          uniforms.tmpSplatReflectance.value !== node.material.reflectance ||
+          uniforms.tmpSplatTransmission.value !== node.material.transmission
+        ) {
+          uniforms.tmpSplatSize.value = size
+          uniforms.tmpSplatBase.value.copy(color)
+          uniforms.tmpSplatReflectance.value = node.material.reflectance
+          uniforms.tmpSplatTransmission.value = node.material.transmission
+          mesh.opacity = opacity
+          mesh.updateVersion()
+        }
       }
     }
     for (const [id, group] of this.projectors)
@@ -578,13 +629,9 @@ export class ViewportEngine {
       }
       apply(group, p.transform)
     }
-    this.projection.update(doc, selected, this.invalidate)
-    for (const runtime of this.nodes.values())
-      runtime.group.traverse((o) => {
-        if (o instanceof SplatMesh) o.updateVersion()
-      })
+    if (this.projection.update(doc, selected, this.onProjectionChange)) this.dirtySplats = true
     const depthKey = JSON.stringify([
-      doc.nodes.map((n) => [n.id, n.transform, n.visible, n.dimensions, n.assetId]),
+      doc.nodes.map((n) => [n.id, n.transform, n.visible, this.nodes.get(n.id)?.key]),
       doc.projectors
         .filter((p) => p.enabled)
         .map((p) => [p.id, p.transform, p.throwRatio, p.shift, p.extent, p.spec.resolution]),
@@ -860,11 +907,13 @@ export class ViewportEngine {
   tick(delta: number) {
     if (this.disposed || this.state.contextLost) return
     this.controls.update()
-    if (this.manipulating && delta > 1 / 30) {
-      this.slowFrames++
-      if (this.slowFrames >= 10 && this.previewRatio > 0.5) {
+    if (this.manipulating) {
+      this.slowFrames = delta > 1 / 50 ? this.slowFrames + 1 : Math.max(0, this.slowFrames - 1)
+      if (this.slowFrames >= 6 && (this.previewRatio > 0.5 || this.spark.lodSplatScale > 0.1)) {
         this.previewRatio = Math.max(0.5, this.previewRatio * 0.8)
-        this.renderer.setPixelRatio(this.previewRatio)
+        this.spark.lodSplatScale = Math.max(0.1, this.spark.lodSplatScale * 0.75)
+        this.splatPixelSize = Math.min(8, this.splatPixelSize * 1.5)
+        this.setRenderRatio(this.previewRatio)
         this.slowFrames = 0
         this.invalidate()
       }
@@ -883,11 +932,18 @@ export class ViewportEngine {
               : x
           )
         }
-        this.projection.update(doc, this.state.selected, this.invalidate)
+        if (this.projection.update(doc, this.state.selected, this.onProjectionChange))
+          this.dirtySplats = true
       }
       this.dirtyDepth = true
     }
-    if (this.dirtyDepth) this.renderDepth()
+    if (this.dirtyDepth) this.renderDepth(false)
+    // External uniforms and the depth atlas are baked into Spark's generated colors.
+    // Refresh after depth rendering, including live projector gizmo movement.
+    if (this.dirtySplats) {
+      for (const runtime of this.nodes.values()) runtime.splat?.mesh.updateVersion()
+      this.dirtySplats = false
+    }
     const now = performance.now()
     if (now - this.fpsStart > 1500) {
       const extension = this.renderer.getContext().getExtension('WEBGL_debug_renderer_info')
@@ -910,7 +966,7 @@ export class ViewportEngine {
       this.fpsStart = now
     }
   }
-  renderDepth() {
+  renderDepth(force = true) {
     this.dirtyDepth = false
     const renderer = this.renderer,
       depth = this.projection.depth,
@@ -922,13 +978,24 @@ export class ViewportEngine {
       scissorTest = depth.scissorTest,
       clear = renderer.getClearColor(new Color()),
       alpha = renderer.getClearAlpha()
+    this.depthScene.updateMatrixWorld(true)
+    const receivers: unknown[] = []
+    this.depthScene.traverseVisible((o) => {
+      if (o instanceof Mesh || o instanceof Points)
+        receivers.push([o.uuid, o.geometry.uuid, o.matrixWorld.elements])
+    })
+    const receiverKey = JSON.stringify(receivers)
     try {
-      depth.viewport.set(0, 0, depth.width, depth.height)
-      depth.scissorTest = false
-      renderer.setRenderTarget(depth)
       renderer.setClearColor('#ffffff', 1)
-      renderer.clear()
       this.projection.projectors.forEach((p, i) => {
+        const camera = projectorCamera(p),
+          key = JSON.stringify([
+            receiverKey,
+            camera.projectionMatrix.elements,
+            camera.matrixWorldInverse.elements
+          ])
+        // Moving one projector only redraws its tile; receiver changes redraw all tiles.
+        if (!force && this.depthTileKeys[i] === key) return
         // Target rectangles use texture pixels. Renderer.setViewport/setScissor
         // instead scale by the display DPR, corrupting tiles when full quality
         // is restored after a drag (and when adaptive quality changes).
@@ -936,7 +1003,10 @@ export class ViewportEngine {
         depth.scissor.copy(depth.viewport)
         depth.scissorTest = true
         renderer.setRenderTarget(depth)
-        renderer.render(this.depthScene, projectorCamera(p))
+        renderer.clear()
+        renderer.render(this.depthScene, camera)
+        this.depthTileKeys[i] = key
+        this.dirtySplats = true
       })
     } finally {
       depth.viewport.copy(viewport)

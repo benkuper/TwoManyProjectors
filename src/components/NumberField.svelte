@@ -26,6 +26,20 @@
   } = $props()
   let scrubbing = $state(false)
   let cleanup: (() => void) | undefined
+  let pending: number | undefined, frame: number | undefined
+  function flushCommit() {
+    if (frame !== undefined) cancelAnimationFrame(frame)
+    frame = undefined
+    const next = pending
+    pending = undefined
+    if (next !== undefined && next !== value) oncommit(next)
+  }
+  function queueCommit(next: number) {
+    pending = next
+    // Pointer events can arrive faster than the viewport renders. Keep the latest
+    // value and perform one document/UI update per frame, flushing before undo closes.
+    frame ??= requestAnimationFrame(flushCommit)
+  }
   function change(event: Event) {
     const input = event.currentTarget as HTMLInputElement
     const parsed = input.valueAsNumber
@@ -54,7 +68,7 @@
       }
       e.preventDefault()
       const sensitivity = e.shiftKey ? 0.1 : e.ctrlKey || e.metaKey ? 10 : 1
-      oncommit(
+      queueCommit(
         Math.max(min, Math.min(max, Number((startValue + delta * step * sensitivity).toFixed(6))))
       )
     }
@@ -68,6 +82,7 @@
       }
     }
     cleanup = () => {
+      flushCommit()
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
@@ -106,13 +121,14 @@
         min,
         Math.min(max, Number((min + Math.round((fraction * (max - min)) / step) * step).toFixed(6)))
       )
-      if (next !== value) oncommit(next)
+      queueCommit(next)
     }
     const finish = (e: PointerEvent) => {
       if (e.pointerId === event.pointerId) cleanup?.()
     }
     const cancel = () => cleanup?.()
     cleanup = () => {
+      flushCommit()
       window.removeEventListener('pointermove', update)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)

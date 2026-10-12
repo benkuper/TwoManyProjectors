@@ -46,6 +46,7 @@ function assetNode(record: AssetRecord): SceneNode {
     visible: true,
     locked: false,
     material: structuredClone(materials.captured),
+    ...(record.kind === 'splat' ? { gaussian: { opacity: 1, size: 1 } } : {}),
     assetId: record.id,
     dimensions: [1, 1, 1]
   }
@@ -166,8 +167,7 @@ export async function loadAsset(
       const positions: number[] = [],
         normals: number[] = [],
         colors: number[] = [],
-        confidence: number[] = [],
-        scales: number[] = []
+        confidence: number[] = []
       const stride = Math.max(1, Math.ceil(splat.numSplats / 250000))
       splat.forEachSplat((i, c, s, q, opacity, color) => {
         if (i % stride || opacity < 0.25) return
@@ -182,7 +182,6 @@ export async function loadAsset(
         normals.push(n.x, n.y, n.z)
         colors.push(color.r, color.g, color.b)
         confidence.push(Math.min(...dims) / Math.max(...dims) < 0.35 ? 1 : 0)
-        scales.push(Math.max(...dims))
       })
       const g = new BufferGeometry()
       g.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3))

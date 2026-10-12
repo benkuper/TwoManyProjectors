@@ -4,7 +4,10 @@ import type { ViewportEngine } from '../../src/lib/engine'
 import { materials } from '../../src/lib/types'
 
 // Exercise Spark's real generator and output conversion, reading linear RGB like the mesh fixture.
-export async function splatAmbientSample(engine: ViewportEngine) {
+export async function splatAmbientSample(
+  engine: ViewportEngine,
+  { size = 1, opacity = 1, sourceOpacity = 1, offset = 0 } = {}
+) {
   const renderer = engine.renderer,
     scene = new Scene(),
     camera = new PerspectiveCamera(45, 1, 0.01, 10),
@@ -21,15 +24,17 @@ export async function splatAmbientSample(engine: ViewportEngine) {
     new Vector3(),
     new Vector3(0.5, 0.5, 0.05),
     new Quaternion(),
-    1,
+    sourceOpacity,
     new Color(1, 1, 1)
   )
+  const appearance = engine.projection.splatUniforms(materials.captured, size)
   const mesh = new SplatMesh({
       packedSplats: splats,
-      worldModifier: engine.projection.splatModifier(materials.captured)
+      worldModifier: engine.projection.splatModifier(materials.captured, appearance)
     }),
     spark = new SparkRenderer({ renderer, autoUpdate: false })
   scene.add(mesh, spark)
+  mesh.opacity = opacity
   try {
     uniforms.tmpCount.value = 0
     uniforms.tmpMode.value = 0
@@ -39,7 +44,7 @@ export async function splatAmbientSample(engine: ViewportEngine) {
     await spark.update({ scene, camera })
     renderer.render(scene, camera)
     const pixel = new Uint8Array(4)
-    renderer.readRenderTargetPixels(target, 16, 16, 1, 1, pixel)
+    renderer.readRenderTargetPixels(target, 16 + offset, 16, 1, 1, pixel)
     return [...pixel]
   } finally {
     ;[uniforms.tmpCount.value, uniforms.tmpMode.value, uniforms.tmpResponse.value] = previous

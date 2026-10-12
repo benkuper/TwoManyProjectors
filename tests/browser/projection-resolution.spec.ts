@@ -2,6 +2,74 @@ import { test, expect } from '@playwright/test'
 
 test.use({ deviceScaleFactor: 2 })
 
+test('repeated drags retain learned scan detail without resizing an unchanged drawing buffer', async ({
+  page
+}) => {
+  await page.goto('/')
+  await page.waitForFunction(() => {
+    const e = (window as any).__TMP_VIEWPORT__
+    return e && !e.state.recovering
+  })
+  const result = await page.evaluate(() => {
+    const e = (window as any).__TMP_VIEWPORT__,
+      renderer = e.renderer,
+      setPixelRatio = renderer.setPixelRatio.bind(renderer)
+    let resizes = 0
+    renderer.setPixelRatio = (ratio: number) => {
+      resizes++
+      setPixelRatio(ratio)
+    }
+    try {
+      const detail = () => ({
+        budget: e.spark.lodSplatScale,
+        pixelSize: e.spark.lodRenderScale / renderer.getPixelRatio()
+      })
+      const idle = detail()
+      e.lowQuality()
+      const first = detail(),
+        starts = resizes
+      e.lowQuality()
+      const repeatedStartResizes = resizes - starts
+      // Simulate a slower GPU learning a smaller preview during this drag.
+      for (let i = 0; i < 6; i++) e.tick(1 / 30)
+      const learned = detail(),
+        learnedRatio = renderer.getPixelRatio()
+      e.fullQuality()
+      const released = detail(),
+        fullRatio = renderer.getPixelRatio()
+      e.lowQuality()
+      const next = detail(),
+        nextRatio = renderer.getPixelRatio()
+      e.fullQuality()
+      const stops = resizes
+      e.fullQuality()
+      return {
+        idle,
+        first,
+        learned,
+        released,
+        next,
+        learnedRatio,
+        nextRatio,
+        fullRatio,
+        repeatedStartResizes,
+        repeatedEndResizes: resizes - stops
+      }
+    } finally {
+      renderer.setPixelRatio = setPixelRatio
+    }
+  })
+  expect(result.first).toEqual(result.idle)
+  expect(result.learned.budget).toBeLessThan(result.first.budget)
+  expect(result.released.budget).toBe(result.learned.budget)
+  expect(result.released.pixelSize).toBeCloseTo(result.learned.pixelSize)
+  expect(result.next).toEqual(result.learned)
+  expect(result.nextRatio).toBe(result.learnedRatio)
+  expect(result.fullRatio).toBe(1.75)
+  expect(result.repeatedStartResizes).toBe(0)
+  expect(result.repeatedEndResizes).toBe(0)
+})
+
 test('projection and occlusion remain stable when manipulation restores full resolution', async ({
   page
 }) => {

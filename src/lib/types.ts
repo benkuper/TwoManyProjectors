@@ -32,6 +32,8 @@ export interface SceneNode {
   visible: boolean
   locked: boolean
   material: SurfaceMaterial
+  /** Display multipliers; do not change the scan's geometry or analysis. */
+  gaussian?: { opacity: number; size: number }
   assetId?: string
   dimensions: Vec3
 }

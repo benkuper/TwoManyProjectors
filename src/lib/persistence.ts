@@ -54,6 +54,17 @@ export function validateDocument(value: unknown): SceneDocument {
     )
       fail('invalid receiver')
     if (n.assetId && !d.assets.some((a) => a.id === n.assetId)) fail('missing receiver asset')
+    if (
+      n.gaussian !== undefined &&
+      (!n.gaussian ||
+        !finite(n.gaussian.opacity) ||
+        n.gaussian.opacity < 0 ||
+        n.gaussian.opacity > 5 ||
+        !finite(n.gaussian.size) ||
+        n.gaussian.size < 0.1 ||
+        n.gaussian.size > 5)
+    )
+      fail('invalid Gaussian rendering options')
     const m = n.material
     if (
       !m ||

@@ -493,6 +493,37 @@
         >{/if}
     </section>
     {#if node}
+      {#if node.kind === 'splat'}
+        <section class="inspector-section">
+          <h3><SlidersHorizontal size={14} /> Gaussian rendering</h3>
+          <NumberField
+            label="Splat opacity"
+            value={node.gaussian?.opacity ?? 1}
+            min={0}
+            max={5}
+            step={0.05}
+            suffix="×"
+            slider
+            oncommit={(opacity) =>
+              editObject(node.id, { gaussian: { size: node.gaussian?.size ?? 1, opacity } })}
+          />
+          <NumberField
+            label="Splat size"
+            value={node.gaussian?.size ?? 1}
+            min={0.1}
+            max={5}
+            step={0.05}
+            suffix="×"
+            slider
+            oncommit={(size) =>
+              editObject(node.id, { gaussian: { opacity: node.gaussian?.opacity ?? 1, size } })}
+          />
+          <p class="help">
+            Increase size to fill gaps and opacity to strengthen faint splats. 1× uses the original
+            appearance. These controls leave scan dimensions and measurements unchanged.
+          </p>
+        </section>
+      {/if}
       {#if !node.assetId}<section class="inspector-section">
           <h3>Receiver size</h3>
           <div class="vector-fields">

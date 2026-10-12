@@ -127,6 +127,7 @@ export class ProjectionSystem {
   uniforms: Record<string, IUniform>
   projectors: ProjectorConfig[] = []
   mediaKey = ''
+  shadingKey = ''
   generation = 0
   constructor() {
     this.canvas.width = 4096
@@ -188,7 +189,8 @@ export class ProjectionSystem {
     const chosen =
       doc.settings.analysisProjector === 'all' ? selected : doc.settings.analysisProjector
     this.uniforms.tmpSelected.value =
-      doc.settings.analysis === 'lux' && doc.settings.analysisProjector === 'all'
+      doc.settings.analysis === 'preview' ||
+      (doc.settings.analysis === 'lux' && doc.settings.analysisProjector === 'all')
         ? -1
         : Math.max(
             0,
@@ -209,6 +211,30 @@ export class ProjectionSystem {
       this.mediaKey = key
       void this.paint(doc, invalidate)
     }
+    const shadingKey = JSON.stringify([
+      this.projectors.map((p) => [
+        p.transform.position,
+        p.transform.rotation,
+        p.throwRatio,
+        p.shift,
+        p.spec.resolution,
+        p.spec.lumens,
+        p.multiplier,
+        p.extent,
+        p.pattern,
+        p.nativePixelPreview,
+        p.patternCellSize,
+        p.imageId,
+        p.imageFit
+      ]),
+      this.uniforms.tmpMode.value,
+      this.uniforms.tmpSelected.value,
+      doc.settings.range,
+      doc.settings.materialResponse
+    ])
+    const changed = shadingKey !== this.shadingKey
+    this.shadingKey = shadingKey
+    return changed
   }
   async paint(doc: SceneDocument, invalidate: () => void) {
     const generation = ++this.generation,
@@ -332,15 +358,28 @@ export class ProjectionSystem {
         tmpReflectance: { value: surface.reflectance },
         tmpTransmission: { value: surface.transmission }
       },
-      vertexShader: `attribute float confidence;varying vec3 tmpWorld;varying vec3 tmpNormal;varying vec3 tmpColor;varying float tmpConfidence;${hasColor ? 'attribute vec3 color;' : ''}void main(){vec4 world=modelMatrix*vec4(position,1.);tmpWorld=world.xyz;tmpNormal=normalize((vec4(normalize(normalMatrix*normal),0.)*viewMatrix).xyz);tmpConfidence=confidence;tmpColor=${hasColor ? 'color' : 'vec3(1.)'};vec4 view=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*view;gl_PointSize=clamp(28./max(.1,-view.z),2.,10.);}`,
+      // A point's position, normal and projection are constant across its pixels.
+      // Evaluate once per point instead of repeating all projector math per fragment.
+      vertexShader: `attribute float confidence;uniform vec3 tmpBase;uniform float tmpReflectance;uniform float tmpTransmission;varying vec3 tmpColor;${hasColor ? 'attribute vec3 color;' : ''}${projectionGLSL}void main(){vec3 world=(modelMatrix*vec4(position,1.)).xyz;vec3 n=normalize((vec4(normalize(normalMatrix*normal),0.)*viewMatrix).xyz);tmpColor=tmpShade(world,n,tmpBase*${hasColor ? 'color' : 'vec3(1.)'},tmpReflectance,tmpTransmission,confidence);vec4 view=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*view;gl_PointSize=clamp(28./max(.1,-view.z),2.,10.);}`,
       fragmentShader:
-        `uniform vec3 tmpBase;uniform float tmpReflectance;uniform float tmpTransmission;varying vec3 tmpWorld;varying vec3 tmpNormal;varying vec3 tmpColor;varying float tmpConfidence;${projectionGLSL}void main(){if(length(gl_PointCoord-.5)>.5)discard;gl_FragColor=vec4(tmpShade(tmpWorld,tmpNormal,tmpBase*tmpColor,tmpReflectance,tmpTransmission,tmpConfidence),1.);#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}`.replace(
+        `varying vec3 tmpColor;void main(){if(length(gl_PointCoord-.5)>.5)discard;gl_FragColor=vec4(tmpColor,1.);#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}`.replace(
           ';#include',
           ';\n#include'
         )
     })
   }
-  splatModifier(surface: SurfaceMaterial): GsplatModifier {
+  splatUniforms(surface: SurfaceMaterial, size = 1) {
+    return {
+      tmpSplatSize: { value: size },
+      tmpSplatBase: { value: new Color(surface.color) },
+      tmpSplatReflectance: { value: surface.reflectance },
+      tmpSplatTransmission: { value: surface.transmission }
+    }
+  }
+  splatModifier(
+    surface: SurfaceMaterial,
+    appearance = this.splatUniforms(surface)
+  ): GsplatModifier {
     return dyno.dyno({
       inTypes: { gsplat: dyno.Gsplat },
       outTypes: { gsplat: dyno.Gsplat },
@@ -349,6 +388,10 @@ export class ProjectionSystem {
         globals: [
           projectionGLSL,
           `
+uniform float tmpSplatSize;
+uniform vec3 tmpSplatBase;
+uniform float tmpSplatReflectance;
+uniform float tmpSplatTransmission;
 vec3 tmpSplatToLinear(vec3 c) {
  c=max(c,vec3(0.));
  return mix(pow((c+.055)/1.055,vec3(2.4)),c/12.92,lessThanEqual(c,vec3(.04045)));
@@ -358,14 +401,15 @@ vec3 tmpSplatToSRGB(vec3 c) {
  return mix(1.055*pow(c,vec3(1./2.4))-.055,c*12.92,lessThanEqual(c,vec3(.0031308)));
 }`
         ],
-        uniforms: this.uniforms,
+        uniforms: { ...this.uniforms, ...appearance },
         statements: [
           `${outputs.gsplat} = ${inputs.gsplat};`,
+          `${outputs.gsplat}.scales *= tmpSplatSize;`,
           `vec3 tmpS = abs(${inputs.gsplat}.scales);`,
           `vec3 tmpAxis = tmpS.x < tmpS.y && tmpS.x < tmpS.z ? vec3(1,0,0) : tmpS.y < tmpS.z ? vec3(0,1,0) : vec3(0,0,1);`,
           `vec4 tmpQ = ${inputs.gsplat}.quaternion;`,
           `vec3 tmpN = tmpAxis + 2.0*cross(tmpQ.xyz,cross(tmpQ.xyz,tmpAxis)+tmpQ.w*tmpAxis);`,
-          `${outputs.gsplat}.rgba.rgb = tmpSplatToSRGB(tmpShade(${inputs.gsplat}.center,tmpN,tmpSplatToLinear(${inputs.gsplat}.rgba.rgb),${surface.reflectance.toFixed(6)},${surface.transmission.toFixed(6)},min(tmpS.x,min(tmpS.y,tmpS.z))/max(tmpS.x,max(tmpS.y,tmpS.z)) < .35 ? 1. : 0.));`
+          `${outputs.gsplat}.rgba.rgb = tmpSplatToSRGB(tmpShade(${inputs.gsplat}.center,tmpN,tmpSplatBase*tmpSplatToLinear(${inputs.gsplat}.rgba.rgb),tmpSplatReflectance,tmpSplatTransmission,min(tmpS.x,min(tmpS.y,tmpS.z))/max(tmpS.x,max(tmpS.y,tmpS.z)) < .35 ? 1. : 0.));`
         ]
       })
     })

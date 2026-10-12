@@ -1,6 +1,94 @@
 import { test, expect } from '@playwright/test'
 import path from 'node:path'
 
+test('Gaussian size and opacity visibly fill sparse splats', async ({ page }) => {
+  await page.goto('/')
+  await page.waitForFunction(() => (window as any).__TMP_VIEWPORT__?.state.recovering === false)
+  const samples = await page.evaluate(async () => {
+    const { splatAmbientSample } = await import('/tests/browser/spark-fixture.ts' as string)
+    const engine = (window as any).__TMP_VIEWPORT__
+    return {
+      original: await splatAmbientSample(engine, { sourceOpacity: 0.3 }),
+      boosted: await splatAmbientSample(engine, { sourceOpacity: 0.3, opacity: 2 }),
+      small: await splatAmbientSample(engine, { offset: 9 }),
+      large: await splatAmbientSample(engine, { offset: 9, size: 2 })
+    }
+  })
+  expect(samples.boosted[0]).toBeGreaterThan(samples.original[0] * 1.5)
+  expect(samples.large[0]).toBeGreaterThan(samples.small[0] + 5)
+})
+
+test('Gaussian controls persist and undo without recompiling or changing scan geometry', async ({
+  page
+}) => {
+  await page.goto('/')
+  await page
+    .getByLabel('Import asset files')
+    .setInputFiles(path.resolve('public/samples/gaussian.ply'))
+  await page.getByRole('button', { name: 'Import 1 file', exact: true }).click()
+  await expect(page.locator('.busy-toast')).toHaveCount(0)
+  await expect(page.getByLabel('Splat size', { exact: true })).toHaveValue('1')
+  await page.evaluate(() => {
+    const e = (window as any).__TMP_VIEWPORT__,
+      runtime = e.nodes.get(e.state.selected)
+    runtime.splat.mesh.userData.beforeGenerator = runtime.splat.mesh.generator
+  })
+  await page.getByLabel('Splat opacity', { exact: true }).fill('2.5')
+  await page.getByLabel('Splat opacity', { exact: true }).press('Tab')
+  await page.getByLabel('Splat size', { exact: true }).fill('1.8')
+  await page.getByLabel('Splat size', { exact: true }).press('Tab')
+  const state = await page.evaluate(() => {
+    const e = (window as any).__TMP_VIEWPORT__,
+      runtime = e.nodes.get(e.state.selected),
+      node = e.state.doc.nodes.find((n: any) => n.id === e.state.selected)
+    return {
+      gaussian: node.gaussian,
+      scale: node.transform.scale,
+      opacity: runtime.splat.mesh.opacity,
+      size: runtime.splat.uniforms.tmpSplatSize.value,
+      sameGenerator: runtime.splat.mesh.generator === runtime.splat.mesh.userData.beforeGenerator
+    }
+  })
+  expect(state).toEqual({
+    gaussian: { opacity: 2.5, size: 1.8 },
+    scale: [1, 1, 1],
+    opacity: 2.5,
+    size: 1.8,
+    sameGenerator: true
+  })
+  await page.getByLabel('Undo', { exact: true }).click()
+  await expect(page.getByLabel('Splat size', { exact: true })).toHaveValue('1')
+  await page.getByLabel('Redo', { exact: true }).click()
+  await expect(page.getByLabel('Splat size', { exact: true })).toHaveValue('1.8')
+  await page.reload()
+  await page.getByRole('button', { name: 'gaussian', exact: true }).click()
+  await expect(page.getByLabel('Splat opacity', { exact: true })).toHaveValue('2.5')
+  await expect(page.getByLabel('Splat size', { exact: true })).toHaveValue('1.8')
+})
+
+test('scan interaction caches unrelated depth tiles and refreshes live Gaussian projection', async ({
+  page
+}) => {
+  await page.goto('/')
+  await page
+    .getByLabel('Import asset files')
+    .setInputFiles(path.resolve('public/samples/gaussian.ply'))
+  await page.getByRole('button', { name: 'Import 1 file', exact: true }).click()
+  await expect(page.locator('.busy-toast')).toHaveCount(0)
+  const result = await page.evaluate(async () => {
+    const { scanInteractionSample } = await import('/tests/browser/scan-fixture.ts' as string)
+    return scanInteractionSample((window as any).__TMP_VIEWPORT__)
+  })
+  expect(result).toEqual({
+    unchanged: true,
+    live: true,
+    projectorRenders: 1,
+    receiverRenders: 2,
+    previewBudget: 0.4,
+    restoredBudget: 0.4
+  })
+})
+
 test('Gaussian splats retain visible ambient light through Spark color conversion', async ({
   page
 }) => {

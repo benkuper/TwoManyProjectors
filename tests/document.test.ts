@@ -27,6 +27,25 @@ describe('versioned scene documents', () => {
       }
   })
 
+  it('preserves Gaussian boosts and accepts older receivers without rendering options', () => {
+    const doc = sampleDocument()
+    doc.nodes[0].kind = 'splat'
+    expect(validateDocument(structuredClone(doc))).toEqual(doc)
+    doc.nodes[0].gaussian = { opacity: 2.5, size: 1.8 }
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    for (const gaussian of [
+      { opacity: -1, size: 1 },
+      { opacity: 5.1, size: 1 },
+      { opacity: 1, size: 0 },
+      { opacity: 1, size: 5.1 },
+      { opacity: NaN, size: 1 },
+      { opacity: 1, size: Infinity }
+    ]) {
+      const invalid = structuredClone(doc)
+      invalid.nodes[0].gaussian = gaussian
+      expect(() => validateDocument(invalid)).toThrow('Gaussian rendering')
+    }
+  })
   it('validates a complete sample and rejects unsupported versions', () => {
     const d = sampleDocument()
     expect(validateDocument(JSON.parse(JSON.stringify(d)))).toEqual(d)
