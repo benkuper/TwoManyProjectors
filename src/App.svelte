@@ -483,14 +483,6 @@
       }}
     ></button>
     <section class="viewport" aria-label="3D viewport">
-      <div class="viewport-top">
-        <div class="mode-tabs">
-          {#each modes as m}<button
-              class:active={$editor.doc.settings.analysis === m.id}
-              onclick={() => mode(m.id)}>{m.label}</button
-            >{/each}
-        </div>
-      </div>
       <svelte:boundary onerror={(e) => (renderError = String(e))}>
         <Canvas
           renderMode="on-demand"
@@ -527,11 +519,19 @@
         </div>
       </div>
       <div class="viewport-camera-tools">
-        <div class="view-selector">
-          <button onclick={() => updateUI({ orthographic: !$editor.orthographic })}
-            ><Monitor size={13} />{$editor.orthographic
-              ? 'Orthographic'
-              : 'Perspective'}<ChevronDown size={12} /></button
+        <div class="view-selector" role="group" aria-label="Camera projection">
+          <button
+            class:active={!$editor.orthographic}
+            aria-label="Perspective"
+            aria-pressed={!$editor.orthographic}
+            title="Perspective view · O to toggle"
+            onclick={() => updateUI({ orthographic: false })}>Persp</button
+          ><button
+            class:active={$editor.orthographic}
+            aria-label="Orthographic"
+            aria-pressed={$editor.orthographic}
+            title="Orthographic view · O to toggle"
+            onclick={() => updateUI({ orthographic: true })}>Ortho</button
           >
         </div>
         <div class="viewport-view-tools">
@@ -689,51 +689,68 @@
                 : 'Uniform flux per native pixel. Planning estimate.'}
           </p>
         </div>{/if}
-      <div class="viewport-frustums">
-        {#if selected && 'spec' in selected && selected.enabled}
-          <div class="frustum-legend">
-            <span><i style:--frustum-color={selected.color}></i>Current projection</span>
-            <span><i class="shift-envelope"></i>Lens-shift reach</span>
-          </div>
-        {/if}
-        <NumberField
-          label="Volume opacity"
-          value={$editor.doc.settings.volumeOpacity}
-          min={0}
-          max={1}
-          step={0.005}
-          slider
-          oncommit={(v) => setting({ volumeOpacity: v })}
-        />
-        <NumberField
-          label="Outline opacity"
-          value={$editor.doc.settings.outlineOpacity}
-          min={0}
-          max={1}
-          step={0.01}
-          slider
-          oncommit={(v) => setting({ outlineOpacity: v })}
-        />
-      </div>
       <div class="viewport-bottom">
         <div class="navigation-hint">
           <MousePointer2 size={12} /><span>Drag orbit</span><span>·</span><span>Middle pan</span
           ><span>·</span><span>Right drag / scroll zoom</span><kbd>F</kbd><span>frame</span>
         </div>
-        <div class="viewport-toggles">
-          <button
-            class:active={$editor.doc.settings.grid}
-            title="Toggle grid"
-            aria-label="Toggle grid"
-            onclick={() => setting({ grid: !$editor.doc.settings.grid })}
-            ><Grid2X2 size={14} /></button
-          ><button
-            class:active={$editor.doc.settings.materialResponse}
-            title="Toggle material response"
-            aria-label="Toggle material response"
-            onclick={() => setting({ materialResponse: !$editor.doc.settings.materialResponse })}
-            ><Layers size={14} /><span>Materials</span></button
-          >
+        <div class="viewport-parameters" role="group" aria-label="Viewport display settings">
+          {#if selected && 'spec' in selected && selected.enabled}
+            <div class="frustum-legend">
+              <span title="Current projection" aria-label="Current projection"
+                ><i style:--frustum-color={selected.color}></i></span
+              >
+              <span title="Lens-shift reach" aria-label="Lens-shift reach"
+                ><i class="shift-envelope"></i></span
+              >
+            </div>
+          {/if}
+          <div class="viewport-parameter">
+            <NumberField
+              label="Volume opacity"
+              displayLabel="Volume"
+              value={$editor.doc.settings.volumeOpacity}
+              min={0}
+              max={1}
+              step={0.005}
+              slider
+              oncommit={(v) => setting({ volumeOpacity: v })}
+            />
+          </div>
+          <div class="viewport-parameter">
+            <NumberField
+              label="Outline opacity"
+              displayLabel="Outline"
+              value={$editor.doc.settings.outlineOpacity}
+              min={0}
+              max={1}
+              step={0.01}
+              slider
+              oncommit={(v) => setting({ outlineOpacity: v })}
+            />
+          </div>
+          <div class="viewport-toggles">
+            <button
+              class:active={$editor.doc.settings.grid}
+              title="Toggle grid"
+              aria-label="Toggle grid"
+              onclick={() => setting({ grid: !$editor.doc.settings.grid })}
+              ><Grid2X2 size={14} /></button
+            ><button
+              class:active={$editor.doc.settings.materialResponse}
+              title="Toggle material response"
+              aria-label="Toggle material response"
+              onclick={() => setting({ materialResponse: !$editor.doc.settings.materialResponse })}
+              ><Layers size={14} /><span>Materials</span></button
+            >
+          </div>
+        </div>
+        <div class="mode-tabs" role="group" aria-label="Analysis mode">
+          {#each modes as m}<button
+              class:active={$editor.doc.settings.analysis === m.id}
+              aria-pressed={$editor.doc.settings.analysis === m.id}
+              onclick={() => mode(m.id)}>{m.label}</button
+            >{/each}
         </div>
       </div>
     </section>

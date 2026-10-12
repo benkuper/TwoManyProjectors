@@ -3,6 +3,7 @@
   import { beginEdit, endEdit } from '../lib/store'
   let {
     label,
+    displayLabel = label,
     value,
     min = -100000,
     max = 100000,
@@ -13,6 +14,7 @@
     oncommit
   }: {
     label: string
+    displayLabel?: string
     value: number
     min?: number
     max?: number
@@ -131,7 +133,7 @@
 </script>
 
 <label class="number-field" class:scrubbing
-  ><span>{label}</span>
+  ><span>{displayLabel}</span>
   <div>
     <input
       type="number"

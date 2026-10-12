@@ -557,41 +557,32 @@ p {
   min-height: 0;
   isolation: isolate;
   background: #181c23;
+  container: viewport / inline-size;
 }
 .viewport > div:has(> canvas) {
   position: absolute !important;
   inset: 0;
 }
-.viewport-top {
-  position: absolute;
-  left: 17px;
-  right: 17px;
-  top: 14px;
-  z-index: 3;
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  gap: 12px;
-  pointer-events: none;
-}
-.viewport-top > div {
-  pointer-events: auto;
-}
 .view-selector {
   display: flex;
   align-items: center;
-  gap: 11px;
+  padding: 3px;
+  border: 1px solid #35404c;
+  border-radius: 6px;
+  background: #202630e8;
 }
 .view-selector button {
-  padding: 6px 8px;
-  background: #202630df;
-  border: 1px solid #353e4b;
+  padding: 5px 10px;
   font-size: 10px;
-  color: #b6c2d2;
+  color: #8492a6;
+}
+.view-selector button.active {
+  background: #34432b;
+  color: var(--accent);
 }
 .viewport-tools {
   position: absolute;
-  top: 62px;
+  top: 14px;
   left: 17px;
   z-index: 3;
   padding: 4px;
@@ -619,11 +610,10 @@ p {
 .viewport-camera-tools {
   position: absolute;
   right: 17px;
-  top: 171px;
+  top: 128px;
   z-index: 3;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
 }
 .viewport-view-tools {
@@ -633,29 +623,45 @@ p {
   border-radius: 5px;
   background: #202630d9;
 }
-.viewport-frustums {
-  position: absolute;
-  top: 250px;
-  right: 17px;
-  z-index: 3;
-  width: 132px;
-  padding: 11px;
+.viewport-parameters {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 10px;
+  padding: 3px 6px;
   border: 1px solid #35404c;
   border-radius: 6px;
   background: #202630e8;
+  pointer-events: auto;
 }
-.viewport-frustums .range {
-  margin: 11px 0 16px;
+.viewport-parameter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-.viewport-frustums .range:last-child {
-  margin-bottom: 6px;
+.viewport-parameter .number-field {
+  display: contents;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.viewport-parameter .number-field > div {
+  width: 42px;
+  flex-shrink: 0;
+}
+.viewport-parameter .number-field input {
+  padding: 4px;
+  font-size: 9px;
+}
+.viewport-parameter .range {
+  width: 50px;
+  margin: 0 2px;
 }
 .frustum-legend {
-  display: grid;
-  gap: 8px;
-  padding-bottom: 12px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid #35404c;
+  display: flex;
+  gap: 6px;
+  padding-right: 10px;
+  border-right: 1px solid #35404c;
+  flex-shrink: 0;
   color: #a2b0c2;
   font-size: 9px;
 }
@@ -677,6 +683,9 @@ p {
   background: #13171dca;
   border: 1px solid #323a46;
   border-radius: 6px;
+  pointer-events: auto;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .mode-tabs button {
   font-size: 10px;
@@ -690,11 +699,14 @@ p {
 .viewport-bottom {
   position: absolute;
   bottom: 14px;
-  left: 20px;
-  right: 20px;
+  left: 12px;
+  right: 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
   pointer-events: none;
   z-index: 3;
 }
@@ -707,6 +719,8 @@ p {
   background: #181d2599;
   padding: 6px;
   border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .navigation-hint kbd {
   font-size: 8px;
@@ -715,14 +729,12 @@ p {
 .viewport-toggles {
   display: flex;
   align-items: center;
-  background: #202630d9;
-  border: 1px solid #35404c;
-  border-radius: 5px;
   pointer-events: auto;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .viewport-toggles button {
-  padding: 7px;
+  padding: 4px;
   color: #718094;
   font-size: 9px;
 }
@@ -1470,6 +1482,52 @@ p {
   padding: 10px 15px;
   background: #34432c;
   color: var(--accent);
+}
+@container viewport (max-width: 1100px) {
+  .navigation-hint :nth-child(n + 3),
+  .viewport-toggles span {
+    display: none;
+  }
+}
+@container viewport (max-width: 1000px) {
+  .frustum-legend {
+    display: none;
+  }
+}
+@container viewport (max-width: 760px) {
+  .navigation-hint {
+    display: none;
+  }
+}
+@container viewport (max-width: 620px) {
+  .viewport-parameter .range {
+    display: none;
+  }
+  .viewport-parameters {
+    gap: 6px;
+    padding: 3px 4px;
+  }
+  .viewport-parameter .number-field > div {
+    width: 36px;
+  }
+}
+@container viewport (max-width: 460px) {
+  .viewport-parameters {
+    gap: 5px;
+  }
+  .viewport-parameter .number-field {
+    font-size: 8px;
+  }
+  .viewport-parameter {
+    gap: 4px;
+  }
+  .viewport-parameter .number-field > div {
+    width: 32px;
+  }
+  .viewport-bottom .mode-tabs button {
+    font-size: 8px;
+    padding: 6px 5px;
+  }
 }
 @media (max-width: 1200px) {
   .topbar {

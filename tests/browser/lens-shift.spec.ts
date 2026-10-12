@@ -36,12 +36,13 @@ async function envelopeGeometry(page: Page) {
 }
 
 test('only the selected enabled projector shows its lens-shift envelope', async ({ page }) => {
+  await page.setViewportSize({ width: 1900, height: 950 })
   await ready(page)
   expect(await envelopeOwners(page)).toEqual(['Projector 01'])
-  await expect(page.getByText('Lens-shift reach', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Lens-shift reach', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Main screen', exact: true }).click()
   expect(await envelopeOwners(page)).toEqual([])
-  await expect(page.getByText('Lens-shift reach', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Lens-shift reach', { exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Projector 01', exact: true }).click()
   await page.getByRole('button', { name: 'Add projector', exact: true }).click()
   const name = await page.getByLabel('Object name').inputValue()

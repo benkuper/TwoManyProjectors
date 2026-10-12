@@ -24,8 +24,12 @@ test('studio renders, edits, analyses, and saves a complete project', async ({
   ).toHaveCount(2)
   await page.getByRole('button', { name: 'Illuminance', exact: true }).click()
   await expect(page.getByLabel('Analysis projector', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Perspective', exact: false }).click()
-  await expect(page.getByRole('button', { name: 'Orthographic', exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Orthographic', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Orthographic', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  )
+  await expect(page.getByRole('button', { name: 'Perspective', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Projection', exact: true }).click()
   await page.screenshot({ path: testInfo.outputPath('studio.png'), fullPage: true })
   const downloadPromise = page.waitForEvent('download')

@@ -7,6 +7,7 @@
   import type { ViewportGizmo } from 'three-viewport-gizmo'
   import { ViewportEngine } from '../lib/engine'
   import { editor } from '../lib/store'
+  import { cubeFaceInset, cubeFaceColors, cubeBaseColor, refineViewCube } from '../lib/view-cube'
   let { onready }: { onready: (engine: ViewportEngine) => void } = $props()
   const context = useThrelte<WebGLRenderer>()
   const { size } = context
@@ -14,7 +15,19 @@
     controls = $state.raw<OrbitControls>()
   let gizmo = $state.raw<ViewportGizmo>()
   $effect(() => {
-    if (gizmo && import.meta.env.DEV) Object.assign(window, { __TMP_GIZMO__: gizmo })
+    if (!gizmo) return
+    const cleanup = refineViewCube(gizmo)
+    if (import.meta.env.DEV) Object.assign(window, { __TMP_GIZMO__: gizmo })
+    // Hover changes materials without emitting a camera change. Request a frame
+    // so face, edge and corner feedback also works with on-demand rendering.
+    const element = document.getElementById('view-cube')
+    element?.addEventListener('pointermove', context.invalidate)
+    element?.addEventListener('pointerleave', context.invalidate)
+    return () => {
+      cleanup()
+      element?.removeEventListener('pointermove', context.invalidate)
+      element?.removeEventListener('pointerleave', context.invalidate)
+    }
   })
   let activeCamera = $state.raw<PerspectiveCamera | OrthographicCamera>(
     new PerspectiveCamera(45, context.size.current.width / context.size.current.height, 0.01, 10000)
@@ -90,19 +103,52 @@
     {controls}
     type="cube"
     placement="top-right"
-    size={98}
-    offset={{ top: 62, right: 20 }}
+    size={104}
+    offset={{ top: 14, right: 17 }}
     renderTask={{ after: outlineTask.task }}
     animated
     speed={1.3}
+    radius={0}
+    font={{ family: 'sans-serif', weight: 700 }}
     background={{ enabled: false }}
-    x={{ label: 'RIGHT', color: '#353d49', labelColor: '#dce2e9', hover: { color: '#7c9c55' } }}
-    y={{ label: 'TOP', color: '#353d49', labelColor: '#dce2e9', hover: { color: '#7c9c55' } }}
-    z={{ label: 'FRONT', color: '#353d49', labelColor: '#dce2e9', hover: { color: '#7c9c55' } }}
-    nx={{ label: 'LEFT' }}
-    ny={{ label: 'BOTTOM' }}
-    nz={{ label: 'BACK' }}
-    corners={{ enabled: true, color: '#424d5e', hover: { color: '#b5ed76' } }}
-    edges={{ enabled: true, color: '#424d5e', hover: { color: '#b5ed76' } }}
+    x={{
+      label: 'RIGHT',
+      color: cubeFaceColors[0],
+      labelColor: '#e4eaf2',
+      scale: cubeFaceInset,
+      hover: { color: '#b5ed76', labelColor: '#172011', scale: cubeFaceInset }
+    }}
+    y={{
+      label: 'TOP',
+      color: cubeFaceColors[1],
+      labelColor: '#e4eaf2',
+      scale: cubeFaceInset,
+      hover: { color: '#b5ed76', labelColor: '#172011', scale: cubeFaceInset }
+    }}
+    z={{
+      label: 'FRONT',
+      color: cubeFaceColors[2],
+      labelColor: '#e4eaf2',
+      scale: cubeFaceInset,
+      hover: { color: '#b5ed76', labelColor: '#172011', scale: cubeFaceInset }
+    }}
+    nx={{ label: 'LEFT', scale: cubeFaceInset, hover: { scale: cubeFaceInset } }}
+    ny={{ label: 'BOTTOM', scale: cubeFaceInset, hover: { scale: cubeFaceInset } }}
+    nz={{ label: 'BACK', scale: cubeFaceInset, hover: { scale: cubeFaceInset } }}
+    corners={{
+      enabled: true,
+      color: cubeBaseColor,
+      opacity: 1,
+      radius: 0,
+      scale: 0.18,
+      hover: { color: '#b5ed76', opacity: 1, scale: 0.18 }
+    }}
+    edges={{
+      enabled: true,
+      color: cubeBaseColor,
+      opacity: 1,
+      radius: 0,
+      hover: { color: '#b5ed76', opacity: 1, scale: 1 }
+    }}
   />
 {/if}

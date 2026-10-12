@@ -9,6 +9,91 @@ async function ready(page: Page) {
   })
 }
 
+test('camera switch shows both projections and follows clicks and the keyboard shortcut', async ({
+  page
+}) => {
+  await ready(page)
+  const perspective = page.getByRole('button', { name: 'Perspective', exact: true })
+  const orthographic = page.getByRole('button', { name: 'Orthographic', exact: true })
+  await expect(perspective).toHaveAttribute('aria-pressed', 'true')
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'false')
+  await orthographic.click()
+  await expect(perspective).toBeVisible()
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'true')
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__TMP_VIEWPORT__.camera.type))
+    .toBe('OrthographicCamera')
+  // Clicking the active half keeps the selected projection.
+  await orthographic.click()
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('o')
+  await expect(perspective).toHaveAttribute('aria-pressed', 'true')
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'false')
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__TMP_VIEWPORT__.camera.type))
+    .toBe('PerspectiveCamera')
+  await orthographic.click()
+  await perspective.click()
+  await expect(perspective).toHaveAttribute('aria-pressed', 'true')
+})
+
+for (const orthographic of [false, true]) {
+  test(`view cube faces, edges and corners are visible and snap the ${orthographic ? 'orthographic' : 'perspective'} camera`, async ({
+    page
+  }) => {
+    await ready(page)
+    if (orthographic) await page.getByRole('button', { name: 'Orthographic', exact: true }).click()
+    await page.waitForFunction(() => !!(window as any).__TMP_GIZMO__)
+    for (const direction of [
+      [1, 1, 1],
+      [1, 0, 1],
+      [0, 0, 1]
+    ]) {
+      const point = await page.evaluate((direction) => {
+        const g = (window as any).__TMP_GIZMO__
+        const Raycaster = (window as any).__TMP_VIEWPORT__.transform.getRaycaster().constructor
+        const ray = new Raycaster()
+        g.updateMatrixWorld(true)
+        const target = g._intersections.find(
+          (o: any) =>
+            o.position
+              .clone()
+              .normalize()
+              .distanceTo(o.position.clone().fromArray(direction).normalize()) < 0.001
+        )
+        if (!target?.visible || target.material.opacity < 0.99)
+          throw new Error('Cube target is invisible')
+        const p = target.getWorldPosition(target.position.clone()).project(g._camera)
+        ray.setFromCamera(p, g._camera)
+        if (ray.intersectObjects(g._intersections, false)[0]?.object !== target)
+          throw new Error(`Cube target ${direction} is obscured`)
+        const rect = document.querySelector('#view-cube')!.getBoundingClientRect()
+        return {
+          x: rect.left + ((p.x + 1) * rect.width) / 2,
+          y: rect.top + ((1 - p.y) * rect.height) / 2
+        }
+      }, direction)
+      const beforeHover = await page.locator('#view-cube').screenshot()
+      await page.mouse.move(point.x, point.y)
+      await expect(page.locator('#view-cube')).toHaveCSS('cursor', 'pointer')
+      expect(await page.locator('#view-cube').screenshot()).not.toEqual(beforeHover)
+      await page.mouse.click(point.x, point.y)
+      await expect
+        .poll(() =>
+          page.evaluate((direction) => {
+            const e = (window as any).__TMP_VIEWPORT__
+            const actual = e.camera.position.clone().sub(e.controls.target).normalize()
+            return actual.distanceTo(actual.clone().fromArray(direction).normalize())
+          }, direction)
+        )
+        .toBeLessThan(0.001)
+      await expect
+        .poll(() => page.evaluate(() => (window as any).__TMP_VIEWPORT__.controls.enabled))
+        .toBe(true)
+    }
+  })
+}
+
 // Choose a point on a visible handle using its real geometry and hit-test it.
 // The interaction itself always goes through mouse events, never synthetic control events.
 async function handlePoint(page: Page, axis = 'X') {
@@ -210,8 +295,9 @@ test('number scrubbing and shift sliders update simulation before release and un
     ['Horizontal shift', 'z'],
     ['Vertical shift', 'w']
   ] as const) {
-    const slider = page.getByLabel(`${label} slider`, { exact: true }),
-      b = (await slider.boundingBox())!
+    const slider = page.getByLabel(`${label} slider`, { exact: true })
+    await slider.scrollIntoViewIfNeeded()
+    const b = (await slider.boundingBox())!
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
     await page.mouse.down()
     await page.mouse.move(b.x + b.width * 0.7, b.y + b.height / 2, { steps: 8 })
