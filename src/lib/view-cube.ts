@@ -38,8 +38,11 @@ function faceTexture(axis: number, sign: number) {
   }
   const texture = new CanvasTexture(canvas)
   texture.colorSpace = SRGBColorSpace
-  texture.repeat.set(0.5, 1)
-  texture.userData.offsetX = 0
+  // Keep linear filtering inside each state so green hover pixels do not bleed
+  // into the resting face along its right edge.
+  texture.repeat.set(254 / 512, 1)
+  texture.offset.x = 1 / 512
+  texture.userData.offsetX = 1 / 512
   return texture
 }
 
