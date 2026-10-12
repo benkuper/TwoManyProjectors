@@ -32,6 +32,8 @@ export function validateDocument(value: unknown): SceneDocument {
     if (typeof o.name !== 'string') fail('missing object name')
   }
   for (const o of [...d.nodes, ...d.projectors]) {
+    if (o.locked === undefined) o.locked = false
+    if (typeof o.locked !== 'boolean') fail('invalid object lock')
     if (
       !o.transform ||
       !tuple(o.transform.position, 3) ||

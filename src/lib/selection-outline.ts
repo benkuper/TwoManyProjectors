@@ -20,6 +20,7 @@ import {
 /** A screen-space silhouette, using shared mesh geometry rather than a bounding box. */
 export class SelectionOutline {
   target: Object3D | undefined
+  targets: Object3D[] = []
   mask = new WebGLRenderTarget(1, 1)
   scene = new Scene()
   camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1)
@@ -64,31 +65,41 @@ export class SelectionOutline {
   }
 
   setTarget(target: Object3D | undefined) {
-    if (this.target === target) return
-    this.target = target
+    this.setTargets(target ? [target] : [])
+  }
+
+  setTargets(targets: Object3D[]) {
+    if (
+      targets.length === this.targets.length &&
+      targets.every((target, i) => target === this.targets[i])
+    )
+      return
+    this.targets = targets
+    this.target = targets[0]
     this.scene.clear()
     this.copies = []
-    target?.traverse((source) => {
-      if (!(source instanceof Mesh || source instanceof Points) || source.userData.splatProxy)
-        return
-      const copy = source.clone(false)
-      copy.material = source instanceof Points ? this.pointsMaterial : this.meshMaterial
-      copy.matrixAutoUpdate = false
-      copy.layers.set(0)
-      copy.raycast = () => {}
-      this.scene.add(copy)
-      this.copies.push({ source, copy })
-    })
+    for (const target of targets)
+      target.traverse((source) => {
+        if (!(source instanceof Mesh || source instanceof Points) || source.userData.splatProxy)
+          return
+        const copy = source.clone(false)
+        copy.material = source instanceof Points ? this.pointsMaterial : this.meshMaterial
+        copy.matrixAutoUpdate = false
+        copy.layers.set(0)
+        copy.raycast = () => {}
+        this.scene.add(copy)
+        this.copies.push({ source, copy })
+      })
   }
 
   render(renderer: WebGLRenderer, camera: Camera) {
-    if (!this.target?.visible || !this.copies.length) return
+    if (!this.targets.some((target) => target.visible) || !this.copies.length) return
     renderer.getDrawingBufferSize(this.size)
     if (this.mask.width !== this.size.x || this.mask.height !== this.size.y) {
       this.mask.setSize(this.size.x, this.size.y)
       this.material.uniforms.texel.value.set(1 / this.size.x, 1 / this.size.y)
     }
-    this.target.updateWorldMatrix(true, true)
+    for (const target of this.targets) target.updateWorldMatrix(true, true)
     for (const { source, copy } of this.copies) {
       copy.matrix.copy(source.matrixWorld)
       copy.visible = source.visible

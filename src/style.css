@@ -440,6 +440,20 @@ p {
 .tree-row .visibility {
   opacity: 0;
 }
+.tree-row .object-lock {
+  opacity: 0.45;
+}
+.tree-row:hover .object-lock,
+.tree-row.selected .object-lock,
+.tree-row.locked .object-lock {
+  opacity: 1;
+}
+.tree-row.locked .object-lock {
+  color: var(--accent);
+}
+.tree-row.locked .tree-select {
+  opacity: 0.55;
+}
 .tree-row:hover .visibility,
 .tree-row.selected .visibility,
 .tree-row.muted .visibility {

@@ -20,6 +20,7 @@ export function makeProjector(spec = customSpec): ProjectorConfig {
     name: 'Projector',
     transform: { ...identity(), position: [0, 2.2, 6] },
     enabled: true,
+    locked: false,
     spec: structuredClone(spec),
     throwRatio: Math.max(spec.throwRange[0], Math.min(1, spec.throwRange[1])),
     shift: [0, 0],
@@ -41,6 +42,7 @@ export function makeNode(kind: SceneNode['kind']): SceneNode {
     kind,
     transform: identity(),
     visible: true,
+    locked: false,
     material: structuredClone(materials.white),
     dimensions: kind === 'plane' ? [6, 3.75, 0.1] : [1, 1, 1]
   }
@@ -85,6 +87,8 @@ export function sampleDocument(): SceneDocument {
 export interface EditorState {
   doc: SceneDocument
   selected: string | null
+  selectedIds: string[]
+  selectionAnchor: string | null
   tool: 'select' | 'translate' | 'rotate' | 'scale' | 'calibrate' | 'aim' | 'probe'
   orthographic: boolean
   revision: number
@@ -107,6 +111,8 @@ const doc = sampleDocument()
 export const editor = writable<EditorState>({
   doc,
   selected: doc.projectors[0].id,
+  selectedIds: [doc.projectors[0].id],
+  selectionAnchor: doc.projectors[0].id,
   tool: 'translate',
   orthographic: false,
   revision: 0,
@@ -156,6 +162,20 @@ export function endEdit() {
 export function updateUI(patch: Partial<EditorState>) {
   editor.update((s) => ({ ...s, ...patch }))
 }
+function reconcileSelection(s: EditorState, doc: SceneDocument) {
+  const existing = new Set(
+    [...doc.projectors, ...doc.nodes].filter((o) => !o.locked).map((o) => o.id)
+  )
+  const selectedIds = s.selectedIds.filter((id) => existing.has(id))
+  const selected =
+    s.selected && selectedIds.includes(s.selected) ? s.selected : (selectedIds.at(-1) ?? null)
+  return {
+    selectedIds,
+    selected,
+    ...(selected !== s.selected ? { calibration: [], calibrationPreview: null } : {}),
+    selectionAnchor: s.selectionAnchor && existing.has(s.selectionAnchor) ? s.selectionAnchor : null
+  }
+}
 export function commit(label: string, change: (doc: SceneDocument) => void) {
   editor.update((s) => {
     const next = structuredClone(s.doc)
@@ -170,6 +190,7 @@ export function commit(label: string, change: (doc: SceneDocument) => void) {
     return {
       ...s,
       doc: next,
+      ...reconcileSelection(s, next),
       revision: s.revision + 1,
       canUndo: editStart ? s.canUndo : true,
       canRedo: false,
@@ -187,6 +208,7 @@ export function undo() {
     return {
       ...s,
       doc: prev,
+      ...reconcileSelection(s, prev),
       revision: s.revision + 1,
       canUndo: undoStack.length > 0,
       canRedo: true,
@@ -204,6 +226,7 @@ export function redo() {
     return {
       ...s,
       doc: next,
+      ...reconcileSelection(s, next),
       revision: s.revision + 1,
       canRedo: redoStack.length > 0,
       canUndo: true,
@@ -215,21 +238,62 @@ export function redo() {
 export function replaceDocument(doc: SceneDocument) {
   editStart = null
   undoStack.length = redoStack.length = 0
+  const selected = [...doc.projectors, ...doc.nodes].find((o) => !o.locked)?.id ?? null
   editor.update((s) => ({
     ...s,
     doc,
-    selected: doc.projectors[0]?.id ?? doc.nodes[0]?.id ?? null,
+    selected,
+    selectedIds: selected ? [selected] : [],
+    selectionAnchor: selected,
     revision: s.revision + 1,
     canUndo: false,
     canRedo: false,
     probe: null,
     calibration: [],
+    calibrationPreview: null,
     interacting: false,
     notice: 'Project opened'
   }))
 }
-export function select(id: string | null) {
-  updateUI({ selected: id, calibration: [], calibrationPreview: null, probe: null })
+export function setSelection(ids: string[], active = ids.at(-1) ?? null, anchor = active) {
+  endEdit()
+  const s = get(editor),
+    existing = new Set(
+      [...s.doc.projectors, ...s.doc.nodes].filter((o) => !o.locked).map((o) => o.id)
+    )
+  const selectedIds = [...new Set(ids)].filter((id) => existing.has(id))
+  updateUI({
+    selectedIds,
+    selected: active && selectedIds.includes(active) ? active : (selectedIds.at(-1) ?? null),
+    selectionAnchor: anchor && existing.has(anchor) ? anchor : null,
+    calibration: [],
+    calibrationPreview: null,
+    probe: null
+  })
+}
+export function select(id: string | null, options: { toggle?: boolean; range?: boolean } = {}) {
+  const s = get(editor)
+  if (!id) {
+    if (!options.toggle && !options.range) setSelection([])
+    return
+  }
+  const order = [...s.doc.projectors, ...s.doc.nodes].filter((o) => !o.locked).map((o) => o.id)
+  if (!order.includes(id)) return
+  if (options.range && s.selectionAnchor && order.includes(s.selectionAnchor)) {
+    const start = order.indexOf(s.selectionAnchor),
+      end = order.indexOf(id)
+    const range = order.slice(Math.min(start, end), Math.max(start, end) + 1)
+    setSelection(options.toggle ? [...s.selectedIds, ...range] : range, id, s.selectionAnchor)
+  } else if (options.toggle) {
+    const ids = s.selectedIds.includes(id)
+      ? s.selectedIds.filter((selected) => selected !== id)
+      : [...s.selectedIds, id]
+    setSelection(ids, ids.includes(id) ? id : (ids.at(-1) ?? null), id)
+  } else setSelection([id])
+}
+export function selectAll() {
+  const s = get(editor)
+  setSelection([...s.doc.projectors, ...s.doc.nodes].map((o) => o.id))
 }
 export function selectedObject() {
   const s = get(editor)
@@ -240,10 +304,27 @@ export function editObject(
   patch: Partial<SceneNode> | Partial<ProjectorConfig>,
   label = 'Properties updated'
 ) {
+  const object = [...get(editor).doc.nodes, ...get(editor).doc.projectors].find((n) => n.id === id)
+  if (
+    !object ||
+    (object.locked &&
+      Object.keys(patch).some((key) => !['locked', 'visible', 'enabled'].includes(key)))
+  )
+    return
   commit(label, (d) => {
     const object = [...d.nodes, ...d.projectors].find((n) => n.id === id)
     if (object) Object.assign(object, patch)
   })
+}
+export function toggleObjectLock(id: string) {
+  endEdit()
+  const object = [...get(editor).doc.nodes, ...get(editor).doc.projectors].find((o) => o.id === id)
+  if (object)
+    editObject(
+      id,
+      { locked: !object.locked },
+      `${object.locked ? 'Unlocked' : 'Locked'} ${object.name}`
+    )
 }
 export function addNode(kind: SceneNode['kind']) {
   const n = makeNode(kind)
@@ -267,27 +348,41 @@ export function toggleProjector(p: ProjectorConfig) {
 }
 export function removeSelected() {
   const s = get(editor)
-  if (!s.selected) return
-  commit('Deleted object', (d) => {
-    d.nodes = d.nodes.filter((n) => n.id !== s.selected)
-    d.projectors = d.projectors.filter((n) => n.id !== s.selected)
+  const ids = new Set(
+    [...s.doc.projectors, ...s.doc.nodes]
+      .filter((o) => !o.locked && s.selectedIds.includes(o.id))
+      .map((o) => o.id)
+  )
+  if (!ids.size) return
+  endEdit()
+  commit(ids.size === 1 ? 'Deleted object' : `Deleted ${ids.size} objects`, (d) => {
+    d.nodes = d.nodes.filter((n) => !ids.has(n.id))
+    d.projectors = d.projectors.filter((n) => !ids.has(n.id))
   })
   select(null)
 }
 export function duplicateSelected() {
-  const obj = selectedObject()
-  if (!obj) return
-  const copy = structuredClone(obj)
-  copy.id = uid()
-  copy.name += ' copy'
-  copy.transform.position[0] += 0.5
-  commit('Duplicated object', (d) => {
-    if ('spec' in copy) {
-      if (d.projectors.filter((p) => p.enabled).length >= 8) copy.enabled = false
-      d.projectors.push(copy)
-    } else d.nodes.push(copy)
+  const s = get(editor)
+  const copies = [...s.doc.projectors, ...s.doc.nodes]
+    .filter((o) => !o.locked && s.selectedIds.includes(o.id))
+    .map((obj) => {
+      const copy = structuredClone(obj)
+      copy.id = uid()
+      copy.name += ' copy'
+      copy.transform.position[0] += 0.5
+      return copy
+    })
+  if (!copies.length) return
+  endEdit()
+  commit(copies.length === 1 ? 'Duplicated object' : `Duplicated ${copies.length} objects`, (d) => {
+    for (const copy of copies) {
+      if ('spec' in copy) {
+        if (d.projectors.filter((p) => p.enabled).length >= 8) copy.enabled = false
+        d.projectors.push(copy)
+      } else d.nodes.push(copy)
+    }
   })
-  select(copy.id)
+  setSelection(copies.map((o) => o.id))
 }
 export function setShift(p: ProjectorConfig, shift: [number, number]) {
   editObject(p.id, { shift: constrainShift(p, shift) }, 'Lens shift updated')

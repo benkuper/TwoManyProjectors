@@ -30,6 +30,7 @@ export interface SceneNode {
   kind: 'plane' | 'box' | 'cylinder' | AssetKind
   transform: Transform
   visible: boolean
+  locked: boolean
   material: SurfaceMaterial
   assetId?: string
   dimensions: Vec3
@@ -58,6 +59,7 @@ export interface ProjectorConfig {
   name: string
   transform: Transform
   enabled: boolean
+  locked: boolean
   spec: ProjectorSpec
   throwRatio: number
   shift: [number, number]

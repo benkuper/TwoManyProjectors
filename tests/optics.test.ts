@@ -19,6 +19,7 @@ const projector = (): ProjectorConfig => ({
   spec: structuredClone(customSpec),
   transform: { ...identity(), position: [0, 0, 6] },
   enabled: true,
+  locked: false,
   throwRatio: 1,
   shift: [0, 0],
   multiplier: 1,

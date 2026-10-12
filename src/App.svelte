@@ -16,6 +16,8 @@
     Grid2X2,
     Home,
     Layers,
+    Lock,
+    LockOpen,
     Maximize,
     Monitor,
     MousePointer2,
@@ -44,7 +46,9 @@
     beginEdit,
     endEdit,
     select,
+    selectAll,
     toggleProjector,
+    toggleObjectLock,
     editObject,
     undo,
     redo,
@@ -145,6 +149,8 @@
   function focusAsset(id: string) {
     const node = $editor.doc.nodes.find((n) => n.assetId === id)
     if (node) {
+      if (node.locked)
+        return updateUI({ notice: `${node.name} is locked. Unlock it in the scene list.` })
       if (!node.visible) editObject(node.id, { visible: true })
       select(node.id)
       engine?.frame()
@@ -221,6 +227,9 @@
       } else if (event.key === 'd') {
         event.preventDefault()
         duplicateSelected()
+      } else if (event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        selectAll()
       }
       return
     }
@@ -391,14 +400,24 @@
         </div>
         {#each $editor.doc.projectors as p}<div
             class="tree-row"
-            class:selected={$editor.selected === p.id}
+            class:selected={$editor.selectedIds.includes(p.id)}
             class:muted={!p.enabled}
+            class:locked={p.locked}
           >
             <button
               class="tree-select"
-              onclick={() => select(p.id)}
+              aria-pressed={$editor.selectedIds.includes(p.id)}
+              disabled={p.locked}
+              onclick={(e) => select(p.id, { toggle: e.ctrlKey || e.metaKey, range: e.shiftKey })}
               ondblclick={() => engine?.frame()}
               ><Sun size={15} style={`color:${p.color}`} /><span>{p.name}</span></button
+            ><button
+              class="icon-button small object-lock"
+              aria-label={`${p.locked ? 'Unlock' : 'Lock'} ${p.name}`}
+              aria-pressed={p.locked}
+              title={p.locked ? 'Unlock to select and edit' : 'Lock selection and editing'}
+              onclick={() => toggleObjectLock(p.id)}
+              >{#if p.locked}<Lock size={13} />{:else}<LockOpen size={13} />{/if}</button
             ><button
               class="icon-button small visibility"
               aria-label={`${p.enabled ? 'Disable' : 'Enable'} ${p.name}`}
@@ -411,16 +430,26 @@
         </div>
         {#each $editor.doc.nodes as n}<div
             class="tree-row"
-            class:selected={$editor.selected === n.id}
+            class:selected={$editor.selectedIds.includes(n.id)}
             class:muted={!n.visible}
+            class:locked={n.locked}
           >
             <button
               class="tree-select"
-              onclick={() => select(n.id)}
+              aria-pressed={$editor.selectedIds.includes(n.id)}
+              disabled={n.locked}
+              onclick={(e) => select(n.id, { toggle: e.ctrlKey || e.metaKey, range: e.shiftKey })}
               ondblclick={() => engine?.frame()}
               >{#if n.assetId}<ScanLine size={15} />{:else}<Box size={15} />{/if}<span
                 >{n.name}</span
               ></button
+            ><button
+              class="icon-button small object-lock"
+              aria-label={`${n.locked ? 'Unlock' : 'Lock'} ${n.name}`}
+              aria-pressed={n.locked}
+              title={n.locked ? 'Unlock to select and edit' : 'Lock selection and editing'}
+              onclick={() => toggleObjectLock(n.id)}
+              >{#if n.locked}<Lock size={13} />{:else}<LockOpen size={13} />{/if}</button
             ><button
               class="icon-button small visibility"
               aria-label={`${n.visible ? 'Hide' : 'Show'} ${n.name}`}
@@ -877,7 +906,7 @@
         estimates in metres.
       </p>
       <div class="shortcuts">
-        {#each [['Orbit', 'Left drag'], ['Pan', 'Middle drag'], ['Dolly', 'Scroll'], ['Frame / home', 'F / Home'], ['Perspective / ortho', 'O'], ['Select / move / rotate / scale', 'V / W / R / S'], ['Sample surface', 'P + click'], ['Duplicate', 'Ctrl D'], ['Undo / redo', 'Ctrl Z / Ctrl Shift Z'], ['Save / open', 'Ctrl S / Ctrl O'], ['Deselect / cancel', 'Escape']] as [label, key]}<div
+        {#each [['Orbit', 'Left drag'], ['Pan', 'Middle drag'], ['Dolly', 'Scroll'], ['Frame / home', 'F / Home'], ['Perspective / ortho', 'O'], ['Select / move / rotate / scale', 'V / W / R / S'], ['Toggle selection', 'Ctrl/Cmd + click'], ['Select range in scene list', 'Shift + click'], ['Select all', 'Ctrl/Cmd A'], ['Sample surface', 'P + click'], ['Duplicate', 'Ctrl D'], ['Undo / redo', 'Ctrl Z / Ctrl Shift Z'], ['Save / open', 'Ctrl S / Ctrl O'], ['Deselect / cancel', 'Escape']] as [label, key]}<div
           >
             <span>{label}</span><kbd>{key}</kbd>
           </div>{/each}

@@ -43,6 +43,7 @@ import { editor, commit, select, updateUI, type EditorState } from './store'
 import { runtimeAssets } from './assets'
 import { ProjectionSystem } from './projection'
 import { SelectionOutline } from './selection-outline'
+import { selectionPivot, transformSelection } from './selection-transform'
 import { aimRotation, pixelFootprint, projectionEnvelope, projectorCamera } from './optics'
 import type { AnalysisSample, ProjectorConfig, SceneNode, Transform, Vec3 } from './types'
 
@@ -114,6 +115,8 @@ export class ViewportEngine {
   frameKey = 0
   ortho = false
   dragStart: Transform | null = null
+  dragObjects = new Map<string, Transform>()
+  selectionGroup = new Group()
   raycaster = new Raycaster()
   down = new Vector2()
   manipulationMode: 'translate' | 'rotate' | 'scale' = 'translate'
@@ -153,6 +156,7 @@ export class ViewportEngine {
     this.transform.getRaycaster().layers.set(2)
     this.transform.addEventListener('change', this.onCamera)
     scene.add(this.transform.getHelper())
+    scene.add(this.selectionGroup)
     this.helpers.layers.set(1)
     scene.add(this.helpers)
     const ambient = new AmbientLight('#ffffff', 1)
@@ -168,29 +172,44 @@ export class ViewportEngine {
       if (event.value) {
         this.pointerManipulated = true
         this.dragStart = this.transform.object ? read(this.transform.object) : null
+        this.dragObjects = new Map(
+          [...this.state.doc.nodes, ...this.state.doc.projectors]
+            .filter((o) => !o.locked && this.state.selectedIds.includes(o.id))
+            .map((o) => [o.id, structuredClone(o.transform)])
+        )
         this.lowQuality()
       } else {
         if (this.transform.object && this.dragStart) {
-          const id = this.state.selected,
-            t = read(this.transform.object)
+          const t = read(this.transform.object),
+            start = this.dragStart
           if (t.scale.every((v) => v > 0) && JSON.stringify(t) !== JSON.stringify(this.dragStart))
-            commit('Transformed object', (d) => {
-              const obj = [...d.nodes, ...d.projectors].find((o) => o.id === id)
-              if (obj) obj.transform = t
-            })
+            commit(
+              this.dragObjects.size > 1 ? 'Transformed selection' : 'Transformed object',
+              (d) => {
+                for (const obj of [...d.nodes, ...d.projectors]) {
+                  const original = this.dragObjects.get(obj.id)
+                  if (original && !obj.locked)
+                    obj.transform =
+                      this.dragObjects.size > 1
+                        ? transformSelection(original, start, t, !('spec' in obj))
+                        : t
+                }
+              }
+            )
           else {
             this.sync()
             this.dirtyDepth = true
           }
         }
         this.dragStart = null
+        this.dragObjects.clear()
         this.fullQuality()
       }
     })
     this.transform.addEventListener('objectChange', () => {
       const node = this.state.doc.nodes.find((n) => n.id === this.state.selected)
       if (
-        node?.kind === 'splat' &&
+        (node?.kind === 'splat' || this.dragObjects.size > 1) &&
         this.transform.getMode() === 'scale' &&
         this.transform.object &&
         this.dragStart
@@ -200,7 +219,22 @@ export class ViewportEngine {
           axis = values
             .map((v, i) => Math.abs(v / base[i] - 1))
             .indexOf(Math.max(...values.map((v, i) => Math.abs(v / base[i] - 1))))
-        this.transform.object.scale.setScalar(values[axis])
+        if (this.dragObjects.size > 1)
+          this.transform.object.scale.fromArray(
+            base.map((v) => (v * values[axis]) / base[axis]) as Vec3
+          )
+        else this.transform.object.scale.setScalar(values[axis])
+      }
+      if (this.dragObjects.size > 1 && this.dragStart && this.transform.object) {
+        const pivot = read(this.transform.object)
+        for (const [id, original] of this.dragObjects) {
+          const group = this.nodes.get(id)?.group ?? this.projectors.get(id)
+          if (group)
+            apply(
+              group,
+              transformSelection(original, this.dragStart, pivot, !this.projectors.has(id))
+            )
+        }
       }
       this.dirtyDepth = true
       this.invalidate()
@@ -226,6 +260,7 @@ export class ViewportEngine {
         !initialized ||
         s.doc !== old.doc ||
         s.selected !== old.selected ||
+        s.selectedIds !== old.selectedIds ||
         s.tool !== old.tool ||
         s.frame !== old.frame ||
         s.orthographic !== old.orthographic ||
@@ -298,13 +333,18 @@ export class ViewportEngine {
     const receivers = [...this.nodes.values()].map((n) => n.group).filter((g) => g.visible),
       hits = this.raycaster.intersectObjects(receivers, true),
       surface = hits.find((h) => this.nodeId(h.object))
+    const lockedIds = new Set(
+      [...this.state.doc.nodes, ...this.state.doc.projectors]
+        .filter((o) => o.locked)
+        .map((o) => o.id)
+    )
     if (this.state.tool === 'probe' && surface) {
       updateUI({ probe: this.probe(surface) })
       return
     }
     if (this.state.tool === 'calibrate' && surface) {
       const id = this.nodeId(surface.object)
-      if (id !== this.state.selected) {
+      if (id === null || id !== this.state.selected || lockedIds.has(id)) {
         updateUI({ error: 'Pick both points on the selected imported asset.' })
         return
       }
@@ -317,7 +357,7 @@ export class ViewportEngine {
     }
     if (this.state.tool === 'aim' && surface) {
       const p = this.state.doc.projectors.find((p) => p.id === this.state.selected)
-      if (p) {
+      if (p && !p.locked) {
         commit('Aimed projector', (d) => {
           d.projectors.find((x) => x.id === p.id)!.transform.rotation = aimRotation(
             p.transform.position,
@@ -329,13 +369,27 @@ export class ViewportEngine {
       return
     }
     this.raycaster.layers.enableAll()
+    const selectableSurface = hits.find((h) => {
+      const id = this.nodeId(h.object)
+      return id && !lockedIds.has(id)
+    })
     const projectorHit = this.raycaster
-      .intersectObjects([...this.projectors.values()], true)
+      .intersectObjects(
+        [...this.projectors.entries()]
+          .filter(([id]) => !lockedIds.has(id))
+          .map(([, group]) => group),
+        true
+      )
       .find((h) => h.object.userData.projectorId)
     this.raycaster.layers.set(0)
-    if (projectorHit && (!surface || projectorHit.distance < surface.distance))
-      select(projectorHit.object.userData.projectorId)
-    else select(surface ? this.nodeId(surface.object) : null)
+    if (projectorHit && (!selectableSurface || projectorHit.distance < selectableSurface.distance))
+      select(projectorHit.object.userData.projectorId, {
+        toggle: event.ctrlKey || event.metaKey || event.shiftKey
+      })
+    else
+      select(selectableSurface ? this.nodeId(selectableSurface.object) : null, {
+        toggle: event.ctrlKey || event.metaKey || event.shiftKey
+      })
   }
   placementPoint(clientX: number, clientY: number): Vec3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect()
@@ -464,7 +518,7 @@ export class ViewportEngine {
         this.nodes.set(node.id, runtime)
       }
       const transform =
-        node.id === selected && this.state.calibrationPreview
+        !node.locked && node.id === selected && this.state.calibrationPreview
           ? this.state.calibrationPreview
           : node.transform
       apply(runtime.group, transform)
@@ -563,13 +617,24 @@ export class ViewportEngine {
       }
       layers(this.calibrationHelpers, 1)
     }
-    const target = this.nodes.get(selected ?? '')?.group ?? this.projectors.get(selected ?? '')
+    const selectedObjects = [...doc.projectors, ...doc.nodes].filter(
+      (o) => !o.locked && this.state.selectedIds.includes(o.id)
+    )
+    const targets = selectedObjects
+      .map((o) => this.nodes.get(o.id)?.group ?? this.projectors.get(o.id))
+      .filter((o): o is Group => !!o)
+    const multiple = selectedObjects.length > 1
+    if (multiple) {
+      apply(this.selectionGroup, selectionPivot(selectedObjects.map((o) => o.transform)))
+      this.selectionGroup.visible = targets.some((o) => o.visible)
+    }
+    const target = multiple ? this.selectionGroup : targets[0]
     if (['translate', 'rotate', 'scale'].includes(tool))
       this.manipulationMode = tool as 'translate' | 'rotate' | 'scale'
     if (target?.visible) {
       if (this.transform.object !== target) this.transform.attach(target)
       this.transform.setMode(
-        this.manipulationMode === 'scale' && this.projectors.has(selected ?? '')
+        !multiple && this.manipulationMode === 'scale' && this.projectors.has(selected ?? '')
           ? 'translate'
           : this.manipulationMode
       )
@@ -579,7 +644,12 @@ export class ViewportEngine {
       this.transform.setScaleSnap(doc.settings.snap ? 0.1 : null)
     } else this.transform.detach()
     // Highlight only the projector body, leaving frustum helpers out of the silhouette.
-    this.selection.setTarget(this.nodes.get(selected ?? '')?.group ?? target?.children[0])
+    this.selection.setTargets(
+      selectedObjects.flatMap((o) => {
+        const outline = this.nodes.get(o.id)?.group ?? this.projectors.get(o.id)?.children[0]
+        return outline ? [outline] : []
+      })
+    )
     if (this.ortho !== this.state.orthographic) this.switchCamera(this.state.orthographic)
     if (this.state.frame !== this.frameKey) {
       this.frameKey = this.state.frame
@@ -761,11 +831,14 @@ export class ViewportEngine {
     this.invalidate()
   }
   frame(home = false) {
-    const target = home
-      ? null
-      : (this.nodes.get(this.state.selected ?? '')?.group ??
-        this.projectors.get(this.state.selected ?? ''))
-    const box = target ? new Box3().setFromObject(target) : new Box3().setFromObject(this.scene)
+    const targets = home
+      ? []
+      : this.state.selectedIds
+          .map((id) => this.nodes.get(id)?.group ?? this.projectors.get(id))
+          .filter((o): o is Group => !!o && o.visible)
+    const target = targets.length > 0
+    const box = target ? new Box3() : new Box3().setFromObject(this.scene)
+    for (const object of targets) box.expandByObject(object)
     if (box.isEmpty()) return
     const center = target ? box.getCenter(new Vector3()) : new Vector3(0, 1.5, 1),
       radius = target ? Math.max(1, box.getSize(new Vector3()).length()) : 12,
@@ -797,16 +870,20 @@ export class ViewportEngine {
       }
     }
     if (this.transform.dragging && this.transform.object && this.dirtyDepth) {
-      const id = this.state.selected,
-        node = this.nodes.get(id ?? '')
-      if (node) {
-        apply(node.depth, read(node.group))
+      for (const id of this.state.selectedIds) {
+        const node = this.nodes.get(id)
+        if (node) apply(node.depth, read(node.group))
       }
-      const p = this.state.doc.projectors.find((p) => p.id === id)
-      if (p) {
-        const doc = structuredClone(this.state.doc)
-        doc.projectors.find((x) => x.id === id)!.transform = read(this.transform.object)
-        this.projection.update(doc, id, this.invalidate)
+      if (this.state.doc.projectors.some((p) => this.state.selectedIds.includes(p.id))) {
+        const doc = {
+          ...this.state.doc,
+          projectors: this.state.doc.projectors.map((x) =>
+            this.state.selectedIds.includes(x.id) && this.projectors.has(x.id)
+              ? { ...x, transform: read(this.projectors.get(x.id)!) }
+              : x
+          )
+        }
+        this.projection.update(doc, this.state.selected, this.invalidate)
       }
       this.dirtyDepth = true
     }
@@ -987,6 +1064,7 @@ export class ViewportEngine {
     this.controls.dispose()
     this.transform.dispose()
     this.transform.getHelper().removeFromParent()
+    this.selectionGroup.removeFromParent()
     for (const n of this.nodes.values()) {
       release(n.group, n.ownedGeometry)
       release(n.depth, false)

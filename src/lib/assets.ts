@@ -44,6 +44,7 @@ function assetNode(record: AssetRecord): SceneNode {
     kind: record.kind,
     transform: identity(),
     visible: true,
+    locked: false,
     material: structuredClone(materials.captured),
     assetId: record.id,
     dimensions: [1, 1, 1]

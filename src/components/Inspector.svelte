@@ -12,6 +12,7 @@
     Move3D
   } from 'lucide-svelte'
   import NumberField from './NumberField.svelte'
+  import MultiSelectionInspector from './MultiSelectionInspector.svelte'
   import { editor, editObject, commit, updateUI, setShift } from '../lib/store'
   import { projectorCatalogue, projectorForSpec, makeCustomSpec } from '../lib/catalogue'
   import {
@@ -144,7 +145,9 @@
 </script>
 
 <div class="panel-heading"><span>INSPECTOR</span><SlidersHorizontal size={14} /></div>
-{#if object}
+{#if $editor.selectedIds.length > 1}
+  <MultiSelectionInspector />
+{:else if object}
   <div class="inspector-scroll">
     <div class="object-title">
       <div class:projector-symbol={!!p} class="object-symbol">

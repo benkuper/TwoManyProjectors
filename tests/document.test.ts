@@ -7,6 +7,26 @@ import { catalogue, customSpec, makeCustomSpec, projectorForSpec } from '../src/
 import { constrainShift } from '../src/lib/optics'
 
 describe('versioned scene documents', () => {
+  it('preserves per-object locks and defaults older documents to unlocked', () => {
+    const doc = sampleDocument()
+    doc.nodes[0].locked = true
+    doc.projectors[0].locked = true
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    const legacy = JSON.parse(JSON.stringify(doc))
+    for (const object of [...legacy.nodes, ...legacy.projectors]) delete object.locked
+    const migrated = validateDocument(legacy)
+    expect([...migrated.nodes, ...migrated.projectors].every((o) => o.locked === false)).toBe(true)
+  })
+
+  it('rejects malformed receiver and projector locks', () => {
+    for (const collection of ['nodes', 'projectors'] as const)
+      for (const locked of ['true', 1, null, {}]) {
+        const doc = JSON.parse(JSON.stringify(sampleDocument()))
+        doc[collection][0].locked = locked
+        expect(() => validateDocument(doc)).toThrow('object lock')
+      }
+  })
+
   it('validates a complete sample and rejects unsupported versions', () => {
     const d = sampleDocument()
     expect(validateDocument(JSON.parse(JSON.stringify(d)))).toEqual(d)

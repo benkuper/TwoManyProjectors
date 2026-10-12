@@ -30,6 +30,7 @@ Open **http://127.0.0.1:4173/**. The static build is in `dist/`. The portable ar
 
 - Start with the sample screen and a 6,000 lm custom projector at 6 m, TR 1, native 1920 × 1200. Its footprint is 6 × 3.75 m, averaging 266.7 lux in the white-field model.
 - Add projectors, planes, boxes or cylinders from the scene panel. Select, duplicate, hide, disable or delete objects. Up to eight projectors can be enabled; additional equipment stays in the document disabled.
+- Use the padlock beside any projector or receiver to prevent selecting or editing it. Locked items are skipped by viewport clicks, range selection and Select all; they still render and participate in projection analysis. Unlock them from the scene list. Locks support undo and save/reload.
 - Import GLB/glTF, OBJ with MTL/textures, STL, mesh/cloud/Gaussian PLY, PCD, XYZ, SPLAT or SPZ. Select companion buffers, MTL and images together. Specify units and Y/Z up before import. Import does not fit or normalize the asset to an invented size.
 - Click an asset in the library to reveal and frame its scene instance. Drag it into the viewport to place a copy with its bottom center on a surface or the ground; the **+** button adds a copy at the original coordinates. Placement preserves the imported units and up axis and supports undo.
 - Set position and Euler angles numerically, or use move, scale and locally oriented rotation gizmos. Drag any numeric field to adjust it live; hold Shift for precision, or click to type. Rotations are stored as quaternions. Snap uses 0.1 m, 15° and 0.1 scale steps. Splat scales are uniform. A completed drag is one undo operation.
@@ -49,6 +50,9 @@ Open **http://127.0.0.1:4173/**. The static build is in `dist/`. The portable ar
 | Frame selection / home         | F / Home                                      |
 | Perspective / orthographic     | O                                             |
 | Select / move / rotate / scale | V / W / R / S                                 |
+| Toggle object selection        | Ctrl/Cmd+click (Shift+click also in viewport) |
+| Select range in scene list     | Shift+click                                   |
+| Select all objects             | Ctrl/Cmd+A                                    |
 | Probe                          | P, then click a receiver                      |
 | Duplicate / delete             | Ctrl+D / Delete                               |
 | Undo / redo                    | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y               |
@@ -56,6 +60,8 @@ Open **http://127.0.0.1:4173/**. The static build is in `dist/`. The portable ar
 | Deselect / help                | Escape / ?                                    |
 
 The Threlte cube supports animated face, edge and corner targets. Scene and inspector panels resize by dragging their dividers or using arrow keys while a divider is focused.
+
+Multiple selected objects share a center for moving, rotating and uniform scaling. The inspector edits their center position while preserving spacing. Duplicate, delete and frame apply to the whole selection; each group edit is one undo command. Group scaling moves projector origins while preserving their optics.
 
 ## Samples
 
