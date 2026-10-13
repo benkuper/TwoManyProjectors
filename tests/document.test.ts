@@ -7,6 +7,67 @@ import { catalogue, customSpec, makeCustomSpec, projectorForSpec } from '../src/
 import { constrainShift } from '../src/lib/optics'
 
 describe('versioned scene documents', () => {
+  it('round trips mesh texture references and rejects missing or non-image textures', () => {
+    const doc = sampleDocument()
+    doc.assets.push({
+      id: 'texture',
+      name: 'texture.png',
+      kind: 'image',
+      files: ['assets/texture/texture.png'],
+      primary: 'assets/texture/texture.png',
+      units: 'm',
+      upAxis: 'y',
+      normals: 'unavailable',
+      originalBytes: 100
+    })
+    doc.nodes[0].textureId = 'texture'
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    for (const textureId of [null, 1, '', 'missing']) {
+      const invalid = structuredClone(doc)
+      Object.assign(invalid.nodes[0], { textureId })
+      expect(() => validateDocument(invalid)).toThrow('invalid surface texture')
+    }
+    const nonImage = structuredClone(doc)
+    nonImage.assets[0].kind = 'mesh'
+    expect(() => validateDocument(nonImage)).toThrow('invalid surface texture')
+    for (const kind of ['cloud', 'splat'] as const) {
+      const invalid = structuredClone(doc)
+      invalid.nodes[0].kind = kind
+      expect(() => validateDocument(invalid)).toThrow('invalid surface texture')
+    }
+  })
+
+  it('migrates mesh lighting and preserves each shading mode and direction', () => {
+    const legacy = JSON.parse(JSON.stringify(sampleDocument()))
+    delete legacy.settings.viewShading
+    delete legacy.settings.lightAzimuth
+    delete legacy.settings.lightElevation
+    expect(validateDocument(legacy).settings).toMatchObject({
+      viewShading: 'directional',
+      lightAzimuth: 45,
+      lightElevation: 45
+    })
+    for (const viewShading of ['none', 'directional', 'projectors'] as const) {
+      const doc = sampleDocument()
+      Object.assign(doc.settings, { viewShading, lightAzimuth: -180, lightElevation: -90 })
+      expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    }
+    for (const patch of [
+      { viewShading: null },
+      { viewShading: 'unknown' },
+      { lightAzimuth: -181 },
+      { lightAzimuth: Infinity },
+      { lightAzimuth: '45' },
+      { lightElevation: 91 },
+      { lightElevation: NaN },
+      { lightElevation: null }
+    ]) {
+      const invalid = structuredClone(sampleDocument())
+      Object.assign(invalid.settings, patch)
+      expect(() => validateDocument(invalid)).toThrow('invalid viewport shading settings')
+    }
+  })
+
   it('defaults dynamic rendering quality off and preserves the saved preference', () => {
     expect(sampleDocument().settings.dynamicRenderingQuality).toBe(false)
     const legacy = JSON.parse(JSON.stringify(sampleDocument()))

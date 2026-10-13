@@ -12,6 +12,19 @@ gltf['buffers'][0].pop('uri')
 jb=json.dumps(gltf).encode();jb+=b' '*((-len(jb))%4)
 glb=struct.pack('<III',0x46546c67,2,12+8+len(jb)+8+len(binary))+struct.pack('<II',len(jb),0x4e4f534a)+jb+struct.pack('<II',len(binary),0x004e4942)+binary
 (out/'triangle.glb').write_bytes(glb)
+# Two triangles with distinct material slots; positions are metres in glTF.
+colored=dict(gltf)
+colored['meshes']=[{'primitives':[
+    {'attributes':{'POSITION':0},'material':0},
+    {'attributes':{'POSITION':1},'material':1}]}]
+colored['materials']=[{'name':name,'pbrMetallicRoughness':{'baseColorFactor':color,'metallicFactor':0}} for name,color in [('Red',[.8,.02,.01,1]),('Green',[.01,.8,.02,1])]]
+colored['bufferViews']=[{'buffer':0,'byteOffset':i*len(binary),'byteLength':len(binary)} for i in range(2)]
+colored['accessors']=[dict(gltf['accessors'][0],bufferView=i) for i in range(2)]
+colored['accessors'][1].update(min=[2,1,0],max=[4,3,0])
+colored_binary=binary+b''.join(struct.pack('<3f',x+3,y,z) for x,y,z in positions)
+colored['buffers']=[{'byteLength':len(colored_binary)}]
+jb=json.dumps(colored).encode();jb+=b' '*((-len(jb))%4)
+(out/'two-tone.glb').write_bytes(struct.pack('<III',0x46546c67,2,12+8+len(jb)+8+len(colored_binary))+struct.pack('<II',len(jb),0x4e4f534a)+jb+struct.pack('<II',len(colored_binary),0x004e4942)+colored_binary)
 (out/'triangle.obj').write_text('mtllib triangle.mtl\no Triangle\nv -1 1 0\nv 1 1 0\nv 0 3 0\nvt 0 0\nvt 1 0\nvt .5 1\nusemtl screen\nf 1/1 2/2 3/3\n')
 (out/'triangle.mtl').write_text('newmtl screen\nKd 1 1 1\nmap_Kd white.png\n')
 def png_chunk(kind,data): return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)

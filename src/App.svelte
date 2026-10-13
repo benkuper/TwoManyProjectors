@@ -12,7 +12,9 @@
     Crosshair,
     Eye,
     EyeOff,
+    FilePlus2,
     FolderOpen,
+    Folders,
     Gauge,
     Grid2X2,
     GripVertical,
@@ -42,6 +44,7 @@
   import Inspector from './components/Inspector.svelte'
   import NumberField from './components/NumberField.svelte'
   import ProjectorVersions from './components/ProjectorVersions.svelte'
+  import ProjectExplorer from './components/ProjectExplorer.svelte'
   import HeightMeasurements from './components/HeightMeasurements.svelte'
   import {
     editor,
@@ -61,12 +64,17 @@
     removeAsset,
     removeSelected,
     duplicateSelected,
-    updateUI,
-    sampleDocument,
-    replaceDocument
+    updateUI
   } from './lib/store'
   import { importFiles, cancelImport, addAssetToScene } from './lib/assets'
-  import { autosave, hydrate, openProject, readRecovery, saveProject } from './lib/persistence'
+  import {
+    autosave,
+    createProject,
+    hydrate,
+    openProject,
+    readRecovery,
+    saveProject
+  } from './lib/persistence'
   import { scaleAroundAnchor } from './lib/optics'
   import { analysisProjectors } from './lib/analysis'
   import {
@@ -81,12 +89,13 @@
   import type { ViewportEngine } from './lib/engine'
   let engine = $state.raw<ViewportEngine>(),
     assetInput: HTMLInputElement,
-    projectInput: HTMLInputElement
+    projectInput: HTMLInputElement,
+    projectExplorer: ProjectExplorer
   let showImport = $state(false),
     showHelp = $state(false),
     showAdd = $state(false),
     pendingFiles = $state<File[]>([]),
-    units = $state<AssetRecord['units']>('m'),
+    units = $state<AssetRecord['units']>('auto'),
     up = $state<AssetRecord['upAxis']>('y'),
     dragging = $state(false)
   const assetDragType = 'application/x-twomanyprojectors-asset'
@@ -261,6 +270,7 @@
     }
   }
   function keyboard(event: KeyboardEvent) {
+    if (event.defaultPrevented || document.querySelector('dialog[open]')) return
     if (event.key === 'Escape') {
       if ($editor.tool === 'height-reference') {
         updateUI({ tool: 'select', error: '', notice: 'Height reference picking cancelled' })
@@ -337,8 +347,10 @@
         updateUI({ error: (e as Error).message })
       } finally {
         if (!disposed) {
+          revision = $editor.revision
           ready = true
           updateUI({ recovering: false, busy: null })
+          void autosave()
         }
       }
     })()
@@ -411,6 +423,17 @@
       >
     </div>
     <div class="top-actions">
+      <button
+        class="quiet-button"
+        aria-label="New project"
+        disabled={$editor.recovering || $editor.busy !== null}
+        onclick={() => projectExplorer.show('new')}><FilePlus2 size={15} /> New</button
+      ><button
+        class="quiet-button"
+        aria-label="Local projects"
+        disabled={$editor.recovering || $editor.busy !== null}
+        onclick={() => projectExplorer.show()}><Folders size={15} /> Projects</button
+      >
       <button
         class="quiet-button"
         onclick={() => projectInput.click()}
@@ -589,7 +612,7 @@
                   class="icon-button small"
                   aria-label={`Remove ${a.name} from library`}
                   title={a.kind === 'image'
-                    ? 'Remove from library and projectors · Undo to restore'
+                    ? 'Remove from library, projectors and surface textures · Undo to restore'
                     : 'Remove from library and scene · Undo to restore'}
                   onclick={() => removeAsset(a.id)}><Trash2 size={13} /></button
                 >
@@ -600,7 +623,7 @@
           </p>{:else}<button class="asset-drop" onclick={() => assetInput.click()}
             ><ArrowUpFromLine size={20} /><strong>Bring your space in</strong><span
               >Drop a model, cloud or splat</span
-            ><small>GLB · OBJ · PLY · SPZ + more</small></button
+            ><small>GLB · FBX · OBJ · PLY · SPZ + more</small></button
           >{/if}
       </div>
     </aside>
@@ -681,6 +704,56 @@
           >
         </div>
       </div>
+      <details class="viewport-shading floating-card">
+        <summary>
+          <Sun size={14} /> Mesh shading
+          <span>{$editor.doc.settings.viewShading === 'directional'
+              ? 'Directional'
+              : $editor.doc.settings.viewShading === 'none'
+                ? 'None'
+                : 'Projectors only'}</span>
+          <ChevronDown size={12} />
+        </summary>
+        <div class="shading-controls">
+          <label class="stack-label"
+            >View shading<select
+              aria-label="View shading"
+              value={$editor.doc.settings.viewShading}
+              onchange={(e) => setting({
+                viewShading: e.currentTarget.value as SceneDocument['settings']['viewShading']
+              })}
+            >
+              <option value="none">None · original colors</option>
+              <option value="directional">Directional light</option>
+              <option value="projectors">Projectors only · dark room</option>
+            </select></label
+          >
+          {#if $editor.doc.settings.viewShading === 'directional'}
+            <NumberField
+              label="Light azimuth"
+              value={$editor.doc.settings.lightAzimuth}
+              min={-180}
+              max={180}
+              step={1}
+              suffix="°"
+              slider
+              oncommit={(v) => setting({ lightAzimuth: v })}
+            />
+            <NumberField
+              label="Light elevation"
+              value={$editor.doc.settings.lightElevation}
+              min={-90}
+              max={90}
+              step={1}
+              suffix="°"
+              slider
+              oncommit={(v) => setting({ lightElevation: v })}
+            />
+            <p class="help">World direction: 0° azimuth is +Z, 90° is +X. Elevation points upward.</p>
+          {/if}
+          <p class="help">Mesh preview lighting. Projector measurements and analysis stay the same.</p>
+        </div>
+      </details>
       {#if $editor.tool === 'aim'}<div class="instruction-chip">
           <Crosshair size={15} /> Click a surface to aim the selected projector
           <button aria-label="Cancel aiming" onclick={() => updateUI({ tool: 'select' })}
@@ -1079,6 +1152,7 @@
   }}
 />
 {#snippet InfoIcon()}<CircleHelp size={18} />{/snippet}
+<ProjectExplorer bind:this={projectExplorer} />
 {#if showImport}<div class="modal-backdrop">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <div class="modal-heading">
@@ -1104,8 +1178,8 @@
       <div class="field-grid">
         <label class="stack-label"
           >File units<select bind:value={units}
-            ><option value="m">Metres</option><option value="cm">Centimetres</option><option
-              value="mm">Millimetres</option
+            ><option value="auto">Automatic · file units</option><option value="m">Metres</option
+            ><option value="cm">Centimetres</option><option value="mm">Millimetres</option
             ><option value="ft">Feet</option></select
           ></label
         ><label class="stack-label"
@@ -1152,8 +1226,8 @@
       <button
         class="wide-button"
         onclick={() => {
-          replaceDocument(sampleDocument())
           showHelp = false
+          void createProject('Sample studio', 'sample')
         }}>Load the sample studio</button
       >
     </div>

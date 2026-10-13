@@ -95,13 +95,31 @@ describe('asset removal', () => {
     expect(get(editor).doc).toEqual(removed)
   })
 
-  it.each(['receiver', 'active projector', 'inactive projector'])(
+  it('clears shared surface textures without deleting meshes and restores them with undo', () => {
+    const doc = sampleDocument()
+    doc.assets = [asset('texture', 'image')]
+    doc.nodes[0].textureId = 'texture'
+    doc.nodes[1].textureId = 'texture'
+    replaceDocument(doc)
+    removeAsset('texture')
+    const removed = get(editor).doc
+    expect(removed.nodes).toHaveLength(doc.nodes.length)
+    expect(removed.nodes.every((node) => node.textureId === undefined)).toBe(true)
+    expect(validateDocument(structuredClone(removed))).toEqual(removed)
+    undo()
+    expect(get(editor).doc).toEqual(doc)
+    redo()
+    expect(get(editor).doc).toEqual(removed)
+  })
+
+  it.each(['receiver', 'textured receiver', 'active projector', 'inactive projector'])(
     'preserves assets used by a locked %s',
     (usage) => {
       const doc = sampleDocument()
       doc.assets = [asset('locked', usage === 'receiver' ? 'mesh' : 'image')]
-      if (usage === 'receiver') {
-        doc.nodes[0].assetId = 'locked'
+      if (usage === 'receiver' || usage === 'textured receiver') {
+        if (usage === 'receiver') doc.nodes[0].assetId = 'locked'
+        else doc.nodes[0].textureId = 'locked'
         doc.nodes[0].locked = true
       } else {
         const p = usage === 'active projector' ? doc.projectors[0] : makeProjector()

@@ -28,7 +28,7 @@
     type Pattern
   } from '../lib/types'
   import { constrainShift, footprint } from '../lib/optics'
-  import { importImage } from '../lib/assets'
+  import { importImage, importTexture } from '../lib/assets'
   import type { ViewportEngine } from '../lib/engine'
   let { engine }: { engine: ViewportEngine | undefined } = $props()
   const object = $derived(
@@ -51,6 +51,7 @@
     node?.assetId ? $editor.doc.assets.find((a) => a.id === node.assetId) : null
   )
   let imageInput = $state<HTMLInputElement>(),
+    textureInput = $state<HTMLInputElement>(),
     lumens = $state<number | null>(null),
     calculating = $state(false)
   $effect(() => {
@@ -144,6 +145,18 @@
     } finally {
       calculating = false
     }
+  }
+  async function texture(event: Event) {
+    const input = event.currentTarget as HTMLInputElement,
+      file = input.files?.[0],
+      id = node?.id
+    if (file && id)
+      try {
+        await importTexture(file, id)
+      } catch (e) {
+        updateUI({ error: (e as Error).message })
+      }
+    input.value = ''
   }
 </script>
 
@@ -565,7 +578,8 @@
       {#if asset}<section class="inspector-section">
           <h3>Asset calibration</h3>
           <p class="help">
-            Imported in {asset.units}, {asset.upAxis.toUpperCase()} up. Original size preserved.
+            {asset.units === 'auto' ? 'Automatic file units' : `Imported in ${asset.units}`},
+            {asset.upAxis.toUpperCase()} up. Original size preserved.
           </p>
           <button
             class="wide-button"
@@ -593,7 +607,7 @@
                 >{key === 'white'
                   ? 'White screen'
                   : key === 'captured'
-                    ? 'Captured appearance'
+                    ? 'Original / captured colors'
                     : key[0].toUpperCase() + key.slice(1)}</option
               >{/each}</select
           ></label
@@ -605,6 +619,36 @@
             oninput={(e) => material({ color: e.currentTarget.value })}
           /></label
         >
+        {#if ['plane', 'box', 'cylinder', 'mesh'].includes(node.kind)}
+          <label class="stack-label">
+            Texture<select
+              aria-label="Surface texture"
+              value={node.textureId ?? ''}
+              onchange={(e) =>
+                editObject(
+                  node.id,
+                  { textureId: e.currentTarget.value || undefined },
+                  'Surface texture updated'
+                )}
+            >
+              <option value="">{node.assetId ? 'Original texture' : 'None'}</option>
+              {#each $editor.doc.assets.filter((a) => a.kind === 'image') as image}
+                <option value={image.id}>{image.name}</option>
+              {/each}
+            </select>
+          </label>
+          <button class="wide-button" onclick={() => textureInput?.click()}
+            ><ImagePlus size={14} /> Import texture</button
+          >
+          <input
+            type="file"
+            hidden
+            bind:this={textureInput}
+            accept="image/png,image/jpeg,image/webp"
+            aria-label="Import surface texture"
+            onchange={texture}
+          />
+        {/if}
         <div class="field-grid">
           <NumberField
             label="Reflectance"

@@ -211,7 +211,7 @@ test('all eight depth-map tiles and blocker shadows are independent of preview r
       .applyQuaternion(receiver.group.quaternion)
       .toArray()
     const visible = receiver.group
-      .localToWorld(receiver.group.position.clone().set(-1.5, 0, 0))
+      .localToWorld(receiver.group.position.clone().set(-0.25, 0, 0))
       .toArray()
     return [1, 0.5, 0.8, 1.25, 1.75, 2].map((ratio) => {
       e.renderer.setPixelRatio(ratio)

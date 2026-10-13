@@ -19,7 +19,7 @@ export interface AssetRecord {
   kind: AssetKind | 'image'
   files: string[]
   primary: string
-  units: 'm' | 'cm' | 'mm' | 'ft'
+  units: 'auto' | 'm' | 'cm' | 'mm' | 'ft'
   upAxis: 'y' | 'z'
   normals: 'imported' | 'estimated' | 'unavailable'
   originalBytes: number
@@ -35,6 +35,8 @@ export interface SceneNode {
   /** Display multipliers; do not change the scan's geometry or analysis. */
   gaussian?: { opacity: number; size: number }
   assetId?: string
+  /** Optional image asset overriding the mesh's base-color texture. */
+  textureId?: string
   dimensions: Vec3
 }
 export type Pattern =
@@ -128,6 +130,10 @@ export interface SceneDocument {
   projectorVersions?: { activeId: string; items: ProjectorVersion[] }
   assets: AssetRecord[]
   settings: {
+    /** Mesh preview lighting only; projector analysis is independent of this light. */
+    viewShading: 'none' | 'directional' | 'projectors'
+    lightAzimuth: number
+    lightElevation: number
     materialResponse: boolean
     analysis: AnalysisMode
     analysisProjector: string | 'all'

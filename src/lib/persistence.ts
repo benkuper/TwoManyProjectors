@@ -1,6 +1,14 @@
 import { zip, unzip, strToU8, strFromU8 } from 'fflate'
 import { get } from 'svelte/store'
-import { editor, ensureProjectorVersions, replaceDocument, updateUI } from './store'
+import {
+  editor,
+  emptyDocument,
+  endEdit,
+  ensureProjectorVersions,
+  replaceDocument,
+  sampleDocument,
+  updateUI
+} from './store'
 import { loadAsset, originalFiles, runtimeAssets, type RuntimeAsset } from './assets'
 import type { ProjectorConfig, SceneDocument, SceneNode } from './types'
 import { makeCustomSpec } from './catalogue'
@@ -57,6 +65,13 @@ export function validateDocument(value: unknown): SceneDocument {
     )
       fail('invalid receiver')
     if (n.assetId && !d.assets.some((a) => a.id === n.assetId)) fail('missing receiver asset')
+    if (
+      n.textureId !== undefined &&
+      (typeof n.textureId !== 'string' ||
+        !['plane', 'box', 'cylinder', 'mesh'].includes(n.kind) ||
+        !d.assets.some((a) => a.id === n.textureId && a.kind === 'image'))
+    )
+      fail('invalid surface texture')
     if (
       n.gaussian !== undefined &&
       (!n.gaussian ||
@@ -156,7 +171,7 @@ export function validateDocument(value: unknown): SceneDocument {
       !['mesh', 'cloud', 'splat', 'image'].includes(a.kind) ||
       !Array.isArray(a.files) ||
       !a.files.includes(a.primary) ||
-      !['m', 'cm', 'mm', 'ft'].includes(a.units) ||
+      !['auto', 'm', 'cm', 'mm', 'ft'].includes(a.units) ||
       !['y', 'z'].includes(a.upAxis)
     )
       fail('invalid asset')
@@ -177,6 +192,19 @@ export function validateDocument(value: unknown): SceneDocument {
     typeof s.snap !== 'boolean'
   )
     fail('invalid analysis settings')
+  if (s.viewShading === undefined) s.viewShading = 'directional'
+  if (s.lightAzimuth === undefined) s.lightAzimuth = 45
+  if (s.lightElevation === undefined) s.lightElevation = 45
+  if (
+    !['none', 'directional', 'projectors'].includes(s.viewShading) ||
+    !finite(s.lightAzimuth) ||
+    s.lightAzimuth < -180 ||
+    s.lightAzimuth > 180 ||
+    !finite(s.lightElevation) ||
+    s.lightElevation < -90 ||
+    s.lightElevation > 90
+  )
+    fail('invalid viewport shading settings')
   if (s.luxDisplay === undefined) s.luxDisplay = 'smooth'
   if (s.luxTarget === undefined) s.luxTarget = [80, 120]
   if (
@@ -275,7 +303,7 @@ export async function hydrate(doc: SceneDocument, files: Map<string, File>) {
     for (const a of doc.assets) {
       for (const path of a.files)
         if (!files.has(path)) throw new Error(`Project is missing ${path}`)
-      if (a.kind !== 'image') staged.set(a.id, await loadAsset(a, files))
+      staged.set(a.id, await loadAsset(a, files))
     }
   } catch (e) {
     for (const a of staged.values()) a.dispose()
@@ -292,8 +320,7 @@ export async function hydrate(doc: SceneDocument, files: Map<string, File>) {
   updateUI({ frame: Date.now() })
 }
 export async function openProject(file: File) {
-  updateUI({ busy: 0.1, busyText: 'Opening project…', error: '' })
-  try {
+  return changeProject(async () => {
     let total = 0
     // Inspect uncompressed lengths before allocating an archive entry.
     const data = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
@@ -323,19 +350,61 @@ export async function openProject(file: File) {
         if (!data[path]) throw new Error(`Project is missing ${path}`)
         files.set(path, new File([data[path] as BlobPart], path.split('/').pop()!))
       }
-    await hydrate(doc, files)
-  } catch (e) {
-    updateUI({ error: (e as Error).message })
-  } finally {
-    updateUI({ busy: null })
-  }
+    return { doc, files }
+  }, 'Project opened')
 }
+
+interface StoredProject {
+  doc: SceneDocument
+}
+export interface LocalProject {
+  id: string
+  name: string
+  modified: string
+  projectors: number
+  receivers: number
+  assets: number
+}
+
 let databasePromise: Promise<IDBDatabase> | undefined
 function database(): Promise<IDBDatabase> {
   return (databasePromise ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open('twomanyprojectors', 1)
-    request.onupgradeneeded = () => request.result.createObjectStore('recovery')
-    request.onsuccess = () => resolve(request.result)
+    const request = indexedDB.open('twomanyprojectors', 2)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains('recovery')) db.createObjectStore('recovery')
+      const projects = db.createObjectStore('projects')
+      const files = db.createObjectStore('projectFiles')
+      const recovery = request.transaction!.objectStore('recovery')
+      // Move the single-session autosave and its original files into the library
+      // in the upgrade transaction, so interruption cannot leave a partial move.
+      const latest = recovery.get('latest')
+      latest.onsuccess = () => {
+        const legacy = latest.result as { doc?: SceneDocument; files?: [string, File][] } | undefined
+        if (!legacy?.doc) return
+        const id = legacy.doc.id
+        projects.put({ doc: legacy.doc }, id)
+        for (const [path, file] of legacy.files ?? []) files.put(file, [id, path])
+        const cursor = recovery.openCursor()
+        cursor.onsuccess = () => {
+          const entry = cursor.result
+          if (!entry) return
+          if (typeof entry.key === 'string' && entry.key.startsWith('file:')) {
+            files.put(entry.value, [id, entry.key.slice(5)])
+            entry.delete()
+          }
+          entry.continue()
+        }
+        recovery.put({ projectId: id }, 'latest')
+      }
+    }
+    request.onsuccess = () => {
+      request.result.onversionchange = () => {
+        request.result.close()
+        databasePromise = undefined
+      }
+      resolve(request.result)
+    }
     request.onerror = () => {
       databasePromise = undefined
       reject(request.error)
@@ -345,7 +414,60 @@ function database(): Promise<IDBDatabase> {
 const checkpointKey = 'twomanyprojectors.latest'
 const savedFiles = new Map<string, File>()
 let savedFileSignature = ''
-export async function autosave() {
+let savedProjectId = ''
+let saveQueue: Promise<void> = Promise.resolve()
+
+function transactionComplete(tx: IDBTransaction) {
+  return new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error('Local storage transaction was aborted'))
+  })
+}
+function requestResult<T>(request: IDBRequest<T>) {
+  return new Promise<T>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+function fileRange(projectId: string) {
+  return IDBKeyRange.bound([projectId], [projectId, []])
+}
+async function writeSnapshot(doc: SceneDocument, files: [string, File][]) {
+  const paths = new Set(files.map(([path]) => path))
+  for (const asset of doc.assets)
+    for (const path of asset.files)
+      if (!paths.has(path)) throw new Error(`Original asset is missing: ${path}`)
+  const db = await database()
+  if (savedProjectId !== doc.id) {
+    savedFiles.clear()
+    savedFileSignature = ''
+    savedProjectId = doc.id
+  }
+  const changedFiles = files.filter(([path, file]) => savedFiles.get(path) !== file)
+  const signature = JSON.stringify([...paths].sort())
+  const tx = db.transaction(['projects', 'projectFiles', 'recovery'], 'readwrite')
+  const complete = transactionComplete(tx)
+  const store = tx.objectStore('projectFiles')
+  for (const [path, file] of changedFiles) store.put(file, [doc.id, path])
+  tx.objectStore('projects').put({ doc }, doc.id)
+  tx.objectStore('recovery').put({ projectId: doc.id }, 'latest')
+  if (signature !== savedFileSignature) {
+    const cursor = store.openKeyCursor(fileRange(doc.id))
+    cursor.onsuccess = () => {
+      const entry = cursor.result
+      if (!entry) return
+      if (!paths.has((entry.key as string[])[1])) store.delete(entry.key)
+      entry.continue()
+    }
+  }
+  await complete
+  for (const path of savedFiles.keys()) if (!paths.has(path)) savedFiles.delete(path)
+  for (const [path, file] of changedFiles) savedFiles.set(path, file)
+  savedFileSignature = signature
+}
+
+export function autosave(): Promise<boolean> {
   // Capture before awaiting, and synchronously checkpoint small scene data so an
   // immediate reload cannot lose the most recent edit while IndexedDB is opening.
   const doc = get(editor).doc
@@ -357,58 +479,119 @@ export async function autosave() {
   } catch {
     /* IndexedDB remains available when localStorage is full or disabled. */
   }
+  // Serialize snapshots so rapid edits, undo and project changes cannot race
+  // file cleanup or write an older document over a newer one.
+  const save = saveQueue.catch(() => {}).then(() => writeSnapshot(doc, files))
+  saveQueue = save
+  return save.then(
+    () => true,
+    (e) => {
+      savedFiles.clear()
+      savedFileSignature = ''
+      updateUI({
+        error: `Autosave unavailable: ${(e as Error).message}. Use Save project to keep your work.`
+      })
+      return false
+    }
+  )
+}
+
+export async function listLocalProjects(): Promise<LocalProject[]> {
+  await saveQueue.catch(() => {})
+  const db = await database()
+  const projects = await requestResult<StoredProject[]>(
+    db.transaction('projects').objectStore('projects').getAll()
+  )
+  return projects
+    .map(({ doc }) => ({
+      id: doc.id,
+      name: doc.name,
+      modified: doc.modified,
+      projectors: doc.projectors.length,
+      receivers: doc.nodes.length,
+      assets: doc.assets.length
+    }))
+    .sort((a, b) => b.modified.localeCompare(a.modified) || a.name.localeCompare(b.name))
+}
+async function readLocalDocument(id: string): Promise<SceneDocument | undefined> {
+  const db = await database()
+  const stored = await requestResult<StoredProject | undefined>(
+    db.transaction('projects').objectStore('projects').get(id)
+  )
+  return stored ? validateDocument(stored.doc) : undefined
+}
+async function readProjectFiles(doc: SceneDocument): Promise<Map<string, File>> {
+  const db = await database()
+  const tx = db.transaction('projectFiles')
+  const complete = transactionComplete(tx)
+  const files = new Map<string, File>()
+  for (const path of new Set(doc.assets.flatMap((a) => a.files))) {
+    const request = tx.objectStore('projectFiles').get([doc.id, path])
+    request.onsuccess = () => {
+      if (request.result) files.set(path, request.result)
+    }
+  }
+  await complete
+  return files
+}
+
+async function changeProject(
+  load: () => Promise<{ doc: SceneDocument; files: Map<string, File> }>,
+  notice: string
+): Promise<boolean> {
+  const state = get(editor)
+  if (state.recovering || state.busy !== null) return false
+  endEdit()
+  updateUI({ busy: 0.1, busyText: 'Opening project…', error: '' })
   try {
-    const db = await database()
-    const changedFiles = files.filter(([path, file]) => savedFiles.get(path) !== file)
-    const paths = new Set(files.map(([path]) => path))
-    const signature = JSON.stringify([...paths].sort())
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('recovery', 'readwrite')
-      const store = tx.objectStore('recovery')
-      for (const [path, file] of changedFiles) store.put(file, `file:${path}`)
-      store.put({ doc }, 'latest')
-      if (signature !== savedFileSignature) {
-        const cursor = store.openKeyCursor()
-        cursor.onsuccess = () => {
-          const entry = cursor.result
-          if (!entry) return
-          if (
-            typeof entry.key === 'string' &&
-            entry.key.startsWith('file:') &&
-            !paths.has(entry.key.slice(5))
-          )
-            store.delete(entry.key)
-          entry.continue()
-        }
-      }
-      // Track queued transactions synchronously so a quick undo cannot skip
-      // rewriting a file that an earlier, still-pending transaction deletes.
-      for (const path of savedFiles.keys()) if (!paths.has(path)) savedFiles.delete(path)
-      for (const [path, file] of changedFiles) savedFiles.set(path, file)
-      savedFileSignature = signature
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-      tx.onabort = () => reject(tx.error)
-    })
+    if (!(await autosave())) return false
+    const { doc, files } = await load()
+    await hydrate(doc, files)
+    if (!(await autosave())) return false
+    updateUI({ notice })
+    return true
   } catch (e) {
-    savedFiles.clear()
-    savedFileSignature = ''
-    updateUI({
-      error: `Autosave unavailable: ${(e as Error).message}. Use Save project to keep your work.`
-    })
+    updateUI({ error: (e as Error).message })
+    return false
+  } finally {
+    updateUI({ busy: null })
   }
 }
+export function createProject(name = 'Untitled studio', template: 'empty' | 'sample' = 'empty') {
+  return changeProject(async () => {
+    const doc = template === 'sample' ? sampleDocument() : emptyDocument(name)
+    doc.name = name.trim() || 'Untitled studio'
+    return { doc, files: new Map() }
+  }, 'New project created')
+}
+export function openLocalProject(id: string) {
+  return changeProject(async () => {
+    const doc = await readLocalDocument(id)
+    if (!doc) throw new Error('This local project is no longer available.')
+    return { doc, files: await readProjectFiles(doc) }
+  }, 'Local project opened')
+}
+export async function deleteLocalProject(id: string) {
+  await saveQueue.catch(() => {})
+  if (get(editor).doc.id === id) throw new Error('Open another project before deleting this one.')
+  const db = await database()
+  const tx = db.transaction(['projects', 'projectFiles'], 'readwrite')
+  const complete = transactionComplete(tx)
+  tx.objectStore('projects').delete(id)
+  tx.objectStore('projectFiles').delete(fileRange(id))
+  await complete
+  if (savedProjectId === id) {
+    savedFiles.clear()
+    savedFileSignature = ''
+    savedProjectId = ''
+  }
+}
+
 export async function readRecovery(): Promise<{
   doc: SceneDocument
   files: [string, File][]
 } | null> {
   try {
-    const db = await database(),
-      result = await new Promise<any>((resolve, reject) => {
-        const r = db.transaction('recovery').objectStore('recovery').get('latest')
-        r.onsuccess = () => resolve(r.result ?? null)
-        r.onerror = () => reject(r.error)
-      })
     let checkpoint: SceneDocument | undefined
     try {
       const json = localStorage.getItem(checkpointKey)
@@ -416,28 +599,20 @@ export async function readRecovery(): Promise<{
     } catch {
       /* Fall back to the last complete IndexedDB snapshot. */
     }
-    const doc: SceneDocument | undefined = checkpoint ?? result?.doc
-    if (!doc) return null
-    const files = new Map<string, File>(result?.files ?? [])
-    const paths = [...new Set(doc.assets.flatMap((a) => a.files))]
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('recovery')
-      for (const path of paths) {
-        const req = tx.objectStore('recovery').get(`file:${path}`)
-        req.onsuccess = () => {
-          if (req.result) files.set(path, req.result)
-        }
-      }
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
-    if (paths.some((path) => !files.has(path))) {
-      if (!result?.doc) return null
-      const fallback = result.doc as SceneDocument
-      if (fallback.assets.some((a) => a.files.some((path) => !files.has(path)))) return null
-      return { doc: fallback, files: [...files] }
+    const db = await database()
+    const latest = await requestResult<{ projectId: string } | undefined>(
+      db.transaction('recovery').objectStore('recovery').get('latest')
+    )
+    const candidates = [checkpoint]
+    if (checkpoint) candidates.push(await readLocalDocument(checkpoint.id))
+    if (latest?.projectId) candidates.push(await readLocalDocument(latest.projectId))
+    for (const doc of candidates) {
+      if (!doc) continue
+      const files = await readProjectFiles(doc)
+      if (doc.assets.some((a) => a.files.some((path) => !files.has(path)))) continue
+      return { doc, files: [...files] }
     }
-    return { doc, files: [...files] }
+    return null
   } catch {
     return null
   }

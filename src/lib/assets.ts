@@ -10,10 +10,13 @@ import {
   PointsMaterial,
   Quaternion,
   SRGBColorSpace,
+  TextureLoader,
   Vector3,
-  type Object3D
+  type Object3D,
+  type Texture
 } from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js'
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js'
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js'
 import { STLLoader } from 'three/addons/loaders/STLLoader.js'
@@ -31,6 +34,7 @@ import { commit, editor, select, uid, updateUI } from './store'
 export interface RuntimeAsset {
   record: AssetRecord
   root: Object3D
+  texture?: Texture
   proxy?: Points
   dispose: () => void
 }
@@ -71,7 +75,7 @@ export function addAssetToScene(assetId: string, point?: Vec3) {
   select(node.id)
   updateUI({ tool: 'translate', frame: Date.now() })
 }
-const meshes = new Set(['glb', 'gltf', 'obj', 'stl', 'ply', 'pcd', 'xyz', 'splat', 'spz'])
+const meshes = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', 'pcd', 'xyz', 'splat', 'spz'])
 export function validateGeometry(g: BufferGeometry) {
   const pos = g.getAttribute('position')
   if (!pos?.count) throw new Error('This asset contains no positions.')
@@ -112,6 +116,23 @@ export async function loadAsset(
 ): Promise<RuntimeAsset> {
   const primary = files.get(record.primary)
   if (!primary) throw new Error(`Missing original file: ${record.primary}`)
+  if (record.kind === 'image') {
+    const url = URL.createObjectURL(primary)
+    let texture: Texture | undefined
+    try {
+      texture = await new TextureLoader().loadAsync(url)
+      signal.throwIfAborted()
+      texture.colorSpace = SRGBColorSpace
+      const loaded = texture
+      return { record, root: new Group(), texture, dispose: () => loaded.dispose() }
+    } catch (e) {
+      texture?.dispose()
+      signal.throwIfAborted()
+      throw new Error(`Could not decode ${primary.name}. Choose a valid PNG, JPEG or WebP image.`)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
   const urls = new Map<string, string>(),
     manager = new LoadingManager(),
     missing = new Set<string>()
@@ -200,6 +221,7 @@ export async function loadAsset(
           ''
         )
       ).scene
+    else if (ext === 'fbx') root = new FBXLoader(manager).parse(bytes, '')
     else if (ext === 'obj') {
       const loader = new OBJLoader(manager),
         text = new TextDecoder().decode(bytes)
@@ -294,6 +316,25 @@ export async function loadAsset(
     root.traverse((object) => {
       if (object instanceof Mesh) {
         validateGeometry(object.geometry)
+        if (!object.geometry.hasAttribute('normal')) object.geometry.computeVertexNormals()
+        if (!object.geometry.hasAttribute('uv')) {
+          // Formats such as STL have no texture coordinates. Project onto the
+          // two largest local axes so a custom image can still cover the mesh.
+          const geometry = object.geometry,
+            box = geometry.boundingBox!,
+            size = box.getSize(new Vector3()),
+            axes = (['x', 'y', 'z'] as Array<'x' | 'y' | 'z'>).sort((a, b) => size[b] - size[a]),
+            positions = geometry.getAttribute('position'),
+            uv = new Float32Array(positions.count * 2),
+            point = new Vector3()
+          for (let i = 0; i < positions.count; i++) {
+            point.fromBufferAttribute(positions, i)
+            uv[i * 2] = (point[axes[0]] - box.min[axes[0]]) / (size[axes[0]] || 1)
+            uv[i * 2 + 1] = (point[axes[1]] - box.min[axes[1]]) / (size[axes[1]] || 1)
+          }
+          geometry.setAttribute('uv', new BufferAttribute(uv, 2))
+        }
+        record.normals = 'imported'
         if (!object.geometry.boundsTree) computeBoundsTree.call(object.geometry)
         object.raycast = acceleratedRaycast
       }
@@ -302,7 +343,15 @@ export async function loadAsset(
     const wrapper = new Group()
     wrapper.add(root)
     if (record.upAxis === 'z') wrapper.rotation.x = -Math.PI / 2
-    wrapper.scale.setScalar({ m: 1, cm: 0.01, mm: 0.001, ft: 0.3048 }[record.units])
+    // FBX declares how many centimetres one source unit represents. glTF uses metres;
+    // formats without unit metadata keep the existing metre convention in Auto mode.
+    const sourceScale = ext === 'fbx' ? (root.userData.unitScaleFactor ?? 1) / 100 : 1
+    const scale =
+      record.units === 'auto'
+        ? sourceScale
+        : { m: 1, cm: 0.01, mm: 0.001, ft: 0.3048 }[record.units]
+    if (!Number.isFinite(scale) || scale <= 0) throw new Error('Invalid model unit scale.')
+    wrapper.scale.setScalar(scale)
     wrapper.updateMatrixWorld(true)
     return {
       record,
@@ -337,7 +386,7 @@ export function cancelImport() {
 }
 export async function importFiles(
   input: File[],
-  units: AssetRecord['units'] = 'm',
+  units: AssetRecord['units'] = 'auto',
   upAxis: AssetRecord['upAxis'] = 'y'
 ) {
   if (controller) return
@@ -351,7 +400,7 @@ export async function importFiles(
     const primaries = input.filter((f) => meshes.has(f.name.split('.').pop()!.toLowerCase()))
     if (!primaries.length)
       throw new Error(
-        'Choose GLB, glTF, OBJ, STL, PLY, PCD, XYZ, SPLAT or SPZ, with companion files.'
+        'Choose GLB, glTF, FBX, OBJ, STL, PLY, PCD, XYZ, SPLAT or SPZ, with companion files.'
       )
     for (let i = 0; i < primaries.length; i++) {
       const file = primaries[i],
@@ -366,7 +415,7 @@ export async function importFiles(
             : ext === 'splat' || ext === 'spz'
               ? 'splat'
               : 'mesh'
-      const companions = ext === 'obj' || ext === 'gltf' ? input : [file]
+      const companions = ext === 'obj' || ext === 'gltf' || ext === 'fbx' ? input : [file]
       const paths = companions.map((f) => `assets/${id}/${f.webkitRelativePath || f.name}`)
       companions.forEach((f, j) => fileMap.set(paths[j], f))
       const record: AssetRecord = {
@@ -402,16 +451,23 @@ export async function importFiles(
     updateUI({ busy: null, busyText: '' })
   }
 }
-export async function importImage(file: File, projectorId: string) {
+export function importImage(file: File, projectorId: string) {
+  return importImageFor(file, projectorId, false)
+}
+export function importTexture(file: File, nodeId: string) {
+  return importImageFor(file, nodeId, true)
+}
+async function importImageFor(file: File, targetId: string, surface: boolean) {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type))
-    throw new Error('Projection images must be PNG, JPEG or WebP.')
-  const bitmap = await createImageBitmap(file)
-  bitmap.close()
+    throw new Error('Images must be PNG, JPEG or WebP.')
+  const state = get(editor),
+    target = (surface ? state.doc.nodes : state.doc.projectors).find((o) => o.id === targetId)
+  if (!target || target.locked) return
+  if (surface && 'kind' in target && !['plane', 'box', 'cylinder', 'mesh'].includes(target.kind))
+    return
   const id = uid(),
-    path = `assets/${id}/${file.name}`
-  originalFiles.set(path, file)
-  commit('Imported projection image', (d) => {
-    d.assets.push({
+    path = `assets/${id}/${file.name}`,
+    record: AssetRecord = {
       id,
       name: file.name,
       kind: 'image',
@@ -421,9 +477,21 @@ export async function importImage(file: File, projectorId: string) {
       upAxis: 'y',
       normals: 'unavailable',
       originalBytes: file.size
-    })
-    const p = d.projectors.find((p) => p.id === projectorId)
-    if (p) {
+    },
+    runtime = await loadAsset(record, new Map([[path, file]])),
+    current = get(editor),
+    object = (surface ? current.doc.nodes : current.doc.projectors).find((o) => o.id === targetId)
+  if (state.documentGeneration !== current.documentGeneration || !object || object.locked) {
+    runtime.dispose()
+    return
+  }
+  runtimeAssets.set(id, runtime)
+  originalFiles.set(path, file)
+  commit(surface ? 'Imported surface texture' : 'Imported projection image', (d) => {
+    d.assets.push(record)
+    if (surface) d.nodes.find((n) => n.id === targetId)!.textureId = id
+    else {
+      const p = d.projectors.find((p) => p.id === targetId)!
       p.imageId = id
       p.pattern = 'image'
     }

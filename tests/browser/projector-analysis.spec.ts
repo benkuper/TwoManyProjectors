@@ -23,7 +23,7 @@ async function ready(page: Page) {
     const { sampleDocument, replaceDocument, select } = await import('/src/lib/store.ts' as string)
     const doc = sampleDocument()
     doc.nodes = [doc.nodes[0]]
-    doc.nodes[0].dimensions[0] = 16
+    doc.nodes[0].transform.scale[0] = 16
     const base = doc.projectors[0]
     doc.projectors = [0, 1, 2].map((i) => ({
       ...structuredClone(base),
@@ -123,10 +123,11 @@ test('overlapping density and distortion agree with probes and exclude occluded 
     const surface = e.nodes.get(doc.nodes[0].id)
     const point = surface.group.position.clone()
     const normal = point.clone().set(0.8, 0, 1).normalize()
+    const localNormal = normal.clone().multiply(surface.group.scale)
     const footprints = doc.projectors.map((p: any) => pixelFootprint(p, point, normal))
     const sample = () => {
       e.renderDepth()
-      const probe = e.probe({ point, object: surface.group.children[0], face: { normal } })
+      const probe = e.probe({ point, object: surface.group.children[0], face: { normal: localNormal } })
       return { probe, color: gpuSample(e, point.toArray(), normal.toArray()) }
     }
     const density = sample()

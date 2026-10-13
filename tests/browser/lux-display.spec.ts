@@ -17,7 +17,7 @@ async function ready(page: Page) {
     const { sampleDocument, replaceDocument, select } = await import('/src/lib/store.ts' as string)
     const doc = sampleDocument()
     doc.nodes = [doc.nodes[0]]
-    doc.nodes[0].dimensions[0] = 12
+    doc.nodes[0].transform.scale[0] = 12
     doc.settings.analysis = 'lux'
     doc.settings.range = [0, 160]
     doc.projectors[0].spec.lumens = 2250 // 100 lux on the 6 x 3.75 m image.
@@ -120,8 +120,11 @@ test('GPU target colors classify summed lux, missing coverage and shadows withou
       doc.nodes.push({
         ...structuredClone(doc.nodes[0]),
         id: 'blocker',
-        dimensions: [3, 2, 0.1],
-        transform: { ...structuredClone(doc.nodes[0].transform), position: [0, 2.2, 3] }
+        transform: {
+          ...structuredClone(doc.nodes[0].transform),
+          position: [0, 2.2, 3],
+          scale: [3, 2, 1]
+        }
       })
     })
     e.renderDepth()

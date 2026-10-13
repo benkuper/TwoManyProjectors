@@ -53,6 +53,8 @@ uniform vec2 tmpRange;
 uniform int tmpLuxDisplay;
 uniform vec2 tmpLuxTarget;
 uniform bool tmpResponse;
+uniform int tmpViewShading;
+uniform vec3 tmpLightDirection;
 uniform float tmpShadowBoost;
 uniform bool tmpShadowHighlight;
 bool tmpHighlightPixel=false;
@@ -149,7 +151,12 @@ vec3 tmpPattern(vec2 uv,int i) {
  float circle=tmpInk(abs(length(pixel-center)-min(resolution.x,resolution.y)*.16),stroke,aa);
  return mix(color,vec3(181.,243.,108.)/255.,max(cross,max(border,circle)));
 }
-vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmission,float confidence) {
+float tmpMeshAmbient(vec3 normal) {
+ if(tmpViewShading==0)return 1.;
+ if(tmpViewShading==2)return .09;
+ return .25+.75*max(0.,dot(normalize(normal),tmpLightDirection));
+}
+vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmission,float confidence,float ambient) {
  tmpHighlightPixel=false;
  vec3 contribution=vec3(0.),blockedContribution=vec3(0.);
  float totalLux=0.,metric=0.,visibleLux=0.,blockedLux=0.;
@@ -201,8 +208,12 @@ vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmiss
  // Apply visualization after computing each mode's values, leaving probes unchanged.
  vec3 luminance=vec3(.2126,.7152,.0722);
  float blockedLight=dot(blockedContribution,luminance);
- vec3 color=tmpResponse?base*(.09+contribution*reflectance*(1.-transmission)):vec3(.045)+contribution;
+ vec3 color=tmpResponse?base*(ambient+contribution*reflectance*(1.-transmission)):vec3(ambient*.5)+contribution;
  return tmpShadowView(color,blockedLight,dot(contribution+blockedContribution,luminance),shadowed);
+}
+// Captured clouds and splats already contain lighting; keep their ambient response.
+vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmission,float confidence) {
+ return tmpShade(point,normal,base,reflectance,transmission,confidence,.09);
 }
 `
 export class ProjectionSystem {
@@ -244,6 +255,8 @@ export class ProjectionSystem {
       tmpLuxDisplay: { value: 0 },
       tmpLuxTarget: { value: new Vector2(80, 120) },
       tmpResponse: { value: true },
+      tmpViewShading: { value: 1 },
+      tmpLightDirection: { value: new Vector3(0.5, Math.SQRT1_2, 0.5) },
       tmpShadowBoost: { value: 1 },
       tmpShadowHighlight: { value: false }
     }
@@ -310,6 +323,17 @@ export class ProjectionSystem {
     this.uniforms.tmpLuxDisplay.value = ['smooth', 'bands', 'target'].indexOf(doc.settings.luxDisplay)
     this.uniforms.tmpLuxTarget.value.fromArray(doc.settings.luxTarget)
     this.uniforms.tmpResponse.value = doc.settings.materialResponse
+    this.uniforms.tmpViewShading.value = ['none', 'directional', 'projectors'].indexOf(
+      doc.settings.viewShading
+    )
+    const azimuth = (doc.settings.lightAzimuth * Math.PI) / 180,
+      elevation = (doc.settings.lightElevation * Math.PI) / 180
+    // Direction toward the light in world space: azimuth 0 is +Z, 90 is +X.
+    this.uniforms.tmpLightDirection.value.set(
+      Math.cos(elevation) * Math.sin(azimuth),
+      Math.sin(elevation),
+      Math.cos(elevation) * Math.cos(azimuth)
+    )
     this.uniforms.tmpShadowBoost.value = doc.settings.shadowBoost
     this.uniforms.tmpShadowHighlight.value = doc.settings.shadowHighlight
     const key = JSON.stringify(
@@ -350,6 +374,9 @@ export class ProjectionSystem {
       doc.settings.luxDisplay,
       doc.settings.luxTarget,
       doc.settings.materialResponse,
+      doc.settings.viewShading,
+      doc.settings.lightAzimuth,
+      doc.settings.lightElevation,
       doc.settings.shadowBoost,
       doc.settings.shadowHighlight
     ])
@@ -513,12 +540,62 @@ export class ProjectionSystem {
       this.invalidate()
     }
   }
-  meshMaterial(source: Material | undefined, surface: SurfaceMaterial) {
+  meshMaterial(
+    source: Material | undefined,
+    surface: SurfaceMaterial,
+    hasColor = false,
+    texture?: Texture
+  ) {
     const material =
       source instanceof MeshStandardMaterial ? source.clone() : new MeshStandardMaterial()
-    material.color.set(surface.color)
-    material.roughness = surface.roughness
-    material.metalness = surface.preset === 'metal' ? 0.7 : 0
+    if (source && !(source instanceof MeshStandardMaterial)) {
+      // OBJ and FBX use Phong/Lambert materials; preserve their appearance when
+      // adapting them to the common projection shader.
+      const imported = source as Partial<MeshStandardMaterial>
+      const properties = [
+        'name',
+        'map',
+        'alphaMap',
+        'alphaTest',
+        'opacity',
+        'transparent',
+        'vertexColors',
+        'flatShading',
+        'normalMap',
+        'normalMapType',
+        'bumpMap',
+        'bumpScale',
+        'aoMap',
+        'aoMapIntensity',
+        'lightMap',
+        'lightMapIntensity',
+        'emissiveMap',
+        'emissiveIntensity',
+        'depthWrite',
+        'depthTest'
+      ] as const
+      Object.assign(
+        material,
+        Object.fromEntries(
+          properties.filter((key) => key in imported).map((key) => [key, imported[key]])
+        )
+      )
+      if (imported.color) material.color.copy(imported.color)
+      if (imported.emissive) material.emissive.copy(imported.emissive)
+      if (imported.normalScale) material.normalScale.copy(imported.normalScale)
+    }
+    if (surface.preset === 'captured') material.color.multiply(new Color(surface.color))
+    else {
+      material.color.set(surface.color)
+      material.roughness = surface.roughness
+      material.metalness = surface.preset === 'metal' ? 0.7 : 0
+    }
+    material.vertexColors ||= hasColor
+    if (texture) {
+      material.map = texture
+      material.color.set(surface.color)
+      material.vertexColors = false
+    }
     material.side = DoubleSide
     const reflectance = { value: surface.reflectance },
       transmission = { value: surface.transmission }
@@ -545,7 +622,9 @@ export class ProjectionSystem {
         shader.fragmentShader
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
-        'outgoingLight=tmpShade(tmpWorld,normalize(tmpNormal),diffuseColor.rgb,tmpReflectance,tmpTransmission,1.);\n#include <opaque_fragment>'
+        // Normal maps and flat/back-face normals shape the view light, while
+        // projector calculations retain the geometric normals used by analysis.
+        'vec3 tmpSurfaceNormal=inverseTransformDirection(normal,viewMatrix);\noutgoingLight=tmpShade(tmpWorld,normalize(tmpNormal),diffuseColor.rgb,tmpReflectance,tmpTransmission,1.,tmpMeshAmbient(tmpSurfaceNormal));\n#include <opaque_fragment>'
       )
       // Keep discrete diagnostic colors consistent with their legends under AgX.
       shader.fragmentShader = shader.fragmentShader.replace(
@@ -553,7 +632,7 @@ export class ProjectionSystem {
         'if(tmpMode!=4&&!tmpHighlightPixel&&!(tmpMode==1&&tmpLuxDisplay>0)) {\n#include <tonemapping_fragment>\n}'
       )
     }
-    material.customProgramCacheKey = () => 'tmp-projection-v4'
+    material.customProgramCacheKey = () => 'tmp-projection-v5'
     return material
   }
   pointsMaterial(surface: SurfaceMaterial, hasColor: boolean) {

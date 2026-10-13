@@ -597,15 +597,19 @@ export class ViewportEngine {
       apply(runtime.group, transform)
       apply(runtime.depth, transform)
       runtime.group.visible = runtime.depth.visible = node.visible
-      const materialKey = JSON.stringify(node.material)
+      const texture = node.textureId ? runtimeAssets.get(node.textureId)?.texture : undefined,
+        materialKey = JSON.stringify([node.material, texture?.uuid])
       if (runtime.materialKey !== materialKey) {
         runtime.materialKey = materialKey
         runtime.group.traverse((o) => {
           if (o instanceof Mesh) {
             const source = o.userData.originalMaterial ?? o.material
             o.userData.originalMaterial = source
-            if (o.userData.projected) (o.material as Material).dispose()
-            o.material = this.projection.meshMaterial(source, node.material)
+            if (o.userData.projected)
+              for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.dispose()
+            const project = (m: Material) =>
+              this.projection.meshMaterial(m, node.material, o.geometry.hasAttribute('color'), texture)
+            o.material = Array.isArray(source) ? source.map(project) : project(source)
             o.userData.projected = true
           } else if (o instanceof Points && !o.userData.splatProxy) {
             if (o.userData.projected) (o.material as Material).dispose()

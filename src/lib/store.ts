@@ -51,34 +51,22 @@ export function makeNode(kind: SceneNode['kind']): SceneNode {
     visible: true,
     locked: false,
     material: structuredClone(materials.white),
-    dimensions: kind === 'plane' ? [6, 3.75, 0.1] : [1, 1, 1]
+    dimensions: [1, 1, 1]
   }
 }
-export function sampleDocument(): SceneDocument {
-  const screen = makeNode('plane')
-  screen.name = 'Main screen'
-  screen.transform.position = [0, 2.2, 0]
-  const floor = makeNode('plane')
-  floor.name = 'Stage floor'
-  floor.dimensions = [12, 10, 0.1]
-  floor.transform.rotation = new Quaternion().setFromEuler(new Euler(-Math.PI / 2, 0, 0)).toArray()
-  floor.material = structuredClone(materials.concrete)
-  const box = makeNode('box')
-  box.name = 'Test plinth'
-  box.dimensions = [0.8, 0.9, 0.8]
-  box.transform.position = [2.2, 0.45, 1.4]
-  box.material = structuredClone(materials.concrete)
-  const projector = makeProjector()
-  projector.name = 'Projector 01'
+export function emptyDocument(name = 'Untitled studio'): SceneDocument {
   const doc: SceneDocument = {
     format: 'TwoManyProjectors',
     version: 1,
     id: uid(),
-    name: 'Untitled studio',
-    nodes: [screen, floor, box],
-    projectors: [projector],
+    name: name.trim() || 'Untitled studio',
+    nodes: [],
+    projectors: [],
     assets: [],
     settings: {
+      viewShading: 'directional',
+      lightAzimuth: 45,
+      lightElevation: 45,
       materialResponse: true,
       analysis: 'preview',
       analysisProjector: 'all',
@@ -96,6 +84,28 @@ export function sampleDocument(): SceneDocument {
     modified: new Date().toISOString()
   }
   ensureProjectorVersions(doc)
+  return doc
+}
+export function sampleDocument(): SceneDocument {
+  const doc = emptyDocument()
+  const screen = makeNode('plane')
+  screen.name = 'Main screen'
+  screen.transform.position = [0, 2.2, 0]
+  screen.transform.scale = [6, 3.75, 1]
+  const floor = makeNode('plane')
+  floor.name = 'Stage floor'
+  floor.transform.scale = [12, 10, 1]
+  floor.transform.rotation = new Quaternion().setFromEuler(new Euler(-Math.PI / 2, 0, 0)).toArray()
+  floor.material = structuredClone(materials.concrete)
+  const box = makeNode('box')
+  box.name = 'Test plinth'
+  box.dimensions = [0.8, 0.9, 0.8]
+  box.transform.position = [2.2, 0.45, 1.4]
+  box.material = structuredClone(materials.concrete)
+  const projector = makeProjector()
+  projector.name = 'Projector 01'
+  doc.nodes = [screen, floor, box]
+  doc.projectors = [projector]
   return doc
 }
 export interface EditorState {
@@ -447,7 +457,7 @@ export function removeAsset(id: string) {
     ...(doc.projectorVersions?.items.flatMap((v) => v.projectors ?? []) ?? [])
   ]
   const locked = [
-    ...doc.nodes.filter((n) => n.assetId === id),
+    ...doc.nodes.filter((n) => n.assetId === id || n.textureId === id),
     ...projectors.filter((p) => p.imageId === id)
   ].find((o) => o.locked)
   if (locked)
@@ -456,6 +466,7 @@ export function removeAsset(id: string) {
   commit(`Removed ${asset.name} · Undo to restore`, (d) => {
     d.assets = d.assets.filter((a) => a.id !== id)
     d.nodes = d.nodes.filter((n) => n.assetId !== id)
+    for (const n of d.nodes) if (n.textureId === id) delete n.textureId
     for (const p of [
       ...d.projectors,
       ...(d.projectorVersions?.items.flatMap((v) => v.projectors ?? []) ?? [])

@@ -4,6 +4,7 @@ import path from 'node:path'
 for (const [label, files, kind] of [
   ['GLB', ['triangle.glb'], 'mesh'],
   ['glTF', ['triangle.gltf', 'triangle.bin'], 'mesh'],
+  ['FBX + texture', ['two-tone.fbx', 'white.png'], 'mesh'],
   ['OBJ + MTL + texture', ['triangle.obj', 'triangle.mtl', 'white.png'], 'mesh'],
   ['STL', ['triangle.stl'], 'mesh'],
   ['mesh PLY', ['mesh.ply'], 'mesh'],
