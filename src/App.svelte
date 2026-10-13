@@ -58,6 +58,7 @@
     editObject,
     undo,
     redo,
+    removeAsset,
     removeSelected,
     duplicateSelected,
     updateUI,
@@ -584,6 +585,14 @@
                     title="Add to scene"
                     onclick={() => addAssetToScene(a.id)}><Plus size={13} /></button
                   >{/if}
+                <button
+                  class="icon-button small"
+                  aria-label={`Remove ${a.name} from library`}
+                  title={a.kind === 'image'
+                    ? 'Remove from library and projectors · Undo to restore'
+                    : 'Remove from library and scene · Undo to restore'}
+                  onclick={() => removeAsset(a.id)}><Trash2 size={13} /></button
+                >
               </div>{/each}
           </div>
           <p class="asset-hint">

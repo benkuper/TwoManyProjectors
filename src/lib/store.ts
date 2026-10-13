@@ -438,6 +438,35 @@ export function toggleProjector(p: ProjectorConfig) {
     return updateUI({ error: 'Eight projectors are already enabled. Disable one first.' })
   editObject(p.id, { enabled: !p.enabled })
 }
+export function removeAsset(id: string) {
+  const { doc } = get(editor)
+  const asset = doc.assets.find((a) => a.id === id)
+  if (!asset) return
+  const projectors = [
+    ...doc.projectors,
+    ...(doc.projectorVersions?.items.flatMap((v) => v.projectors ?? []) ?? [])
+  ]
+  const locked = [
+    ...doc.nodes.filter((n) => n.assetId === id),
+    ...projectors.filter((p) => p.imageId === id)
+  ].find((o) => o.locked)
+  if (locked)
+    return updateUI({ notice: `${locked.name} is locked. Unlock it before removing ${asset.name}.` })
+  endEdit()
+  commit(`Removed ${asset.name} · Undo to restore`, (d) => {
+    d.assets = d.assets.filter((a) => a.id !== id)
+    d.nodes = d.nodes.filter((n) => n.assetId !== id)
+    for (const p of [
+      ...d.projectors,
+      ...(d.projectorVersions?.items.flatMap((v) => v.projectors ?? []) ?? [])
+    ]) {
+      if (p.imageId !== id) continue
+      delete p.imageId
+      if (p.pattern === 'image') p.pattern = 'grid'
+    }
+    // Keep source data cached for Undo; saves include only assets still in the document.
+  })
+}
 export function removeSelected() {
   const s = get(editor)
   const ids = new Set(
