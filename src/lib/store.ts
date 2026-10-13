@@ -14,6 +14,13 @@ import { customSpec } from './catalogue'
 import { constrainShift } from './optics'
 
 export const uid = () => crypto.randomUUID()
+export function ensureProjectorVersions(doc: SceneDocument) {
+  if (!doc.projectorVersions) {
+    const id = uid()
+    doc.projectorVersions = { activeId: id, items: [{ id, name: 'Version 01' }] }
+  }
+  return doc.projectorVersions
+}
 export function makeProjector(spec = customSpec): ProjectorConfig {
   return {
     id: uid(),
@@ -63,7 +70,7 @@ export function sampleDocument(): SceneDocument {
   box.material = structuredClone(materials.concrete)
   const projector = makeProjector()
   projector.name = 'Projector 01'
-  return {
+  const doc: SceneDocument = {
     format: 'TwoManyProjectors',
     version: 1,
     id: uid(),
@@ -76,22 +83,31 @@ export function sampleDocument(): SceneDocument {
       analysis: 'preview',
       analysisProjector: 'all',
       range: [0, 500],
+      luxDisplay: 'smooth',
+      luxTarget: [80, 120],
       grid: true,
+      dynamicRenderingQuality: false,
       snap: false,
       volumeOpacity: 0.045,
-      outlineOpacity: 0.32
+      outlineOpacity: 0.32,
+      shadowBoost: 1,
+      shadowHighlight: false
     },
     modified: new Date().toISOString()
   }
+  ensureProjectorVersions(doc)
+  return doc
 }
 export interface EditorState {
   doc: SceneDocument
   selected: string | null
   selectedIds: string[]
   selectionAnchor: string | null
-  tool: 'select' | 'translate' | 'rotate' | 'scale' | 'calibrate' | 'aim' | 'probe'
+  tool: 'select' | 'translate' | 'rotate' | 'scale' | 'calibrate' | 'aim' | 'probe' | 'height-reference'
   orthographic: boolean
   revision: number
+  /** Identifies project replacements, including reopening the same project ID. */
+  documentGeneration: number
   canUndo: boolean
   canRedo: boolean
   notice: string
@@ -116,6 +132,7 @@ export const editor = writable<EditorState>({
   tool: 'translate',
   orthographic: false,
   revision: 0,
+  documentGeneration: 0,
   canUndo: false,
   canRedo: false,
   notice: 'Ready · everything stays on this device',
@@ -163,6 +180,7 @@ export function updateUI(patch: Partial<EditorState>) {
   editor.update((s) => ({ ...s, ...patch }))
 }
 function reconcileSelection(s: EditorState, doc: SceneDocument) {
+  const versionChanged = s.doc.projectorVersions?.activeId !== doc.projectorVersions?.activeId
   const existing = new Set(
     [...doc.projectors, ...doc.nodes].filter((o) => !o.locked).map((o) => o.id)
   )
@@ -172,8 +190,13 @@ function reconcileSelection(s: EditorState, doc: SceneDocument) {
   return {
     selectedIds,
     selected,
-    ...(selected !== s.selected ? { calibration: [], calibrationPreview: null } : {}),
-    selectionAnchor: s.selectionAnchor && existing.has(s.selectionAnchor) ? s.selectionAnchor : null
+    ...(selected !== s.selected || versionChanged
+      ? { calibration: [], calibrationPreview: null, probe: null }
+      : {}),
+    selectionAnchor: s.selectionAnchor && existing.has(s.selectionAnchor) ? s.selectionAnchor : null,
+    ...(s.tool === 'height-reference' && (selected !== s.selected || versionChanged)
+      ? { tool: 'select' as const }
+      : {})
   }
 }
 export function commit(label: string, change: (doc: SceneDocument) => void) {
@@ -236,12 +259,14 @@ export function redo() {
   })
 }
 export function replaceDocument(doc: SceneDocument) {
+  ensureProjectorVersions(doc)
   editStart = null
   undoStack.length = redoStack.length = 0
   const selected = [...doc.projectors, ...doc.nodes].find((o) => !o.locked)?.id ?? null
   editor.update((s) => ({
     ...s,
     doc,
+    documentGeneration: s.documentGeneration + 1,
     selected,
     selectedIds: selected ? [selected] : [],
     selectionAnchor: selected,
@@ -252,6 +277,7 @@ export function replaceDocument(doc: SceneDocument) {
     calibration: [],
     calibrationPreview: null,
     interacting: false,
+    ...(s.tool === 'height-reference' ? { tool: 'select' as const } : {}),
     notice: 'Project opened'
   }))
 }
@@ -268,7 +294,8 @@ export function setSelection(ids: string[], active = ids.at(-1) ?? null, anchor 
     selectionAnchor: anchor && existing.has(anchor) ? anchor : null,
     calibration: [],
     calibrationPreview: null,
-    probe: null
+    probe: null,
+    ...(s.tool === 'height-reference' ? { tool: 'select' as const } : {})
   })
 }
 export function select(id: string | null, options: { toggle?: boolean; range?: boolean } = {}) {
@@ -340,6 +367,71 @@ export function addProjector(spec?: ProjectorSpec) {
   if (s.doc.projectors.filter((p) => p.enabled).length >= 8) p.enabled = false
   commit('Added projector', (d) => d.projectors.push(p))
   select(p.id)
+}
+function activateProjectorVersion(doc: SceneDocument, id: string) {
+  const versions = ensureProjectorVersions(doc)
+  const current = versions.items.find((version) => version.id === versions.activeId)!
+  const next = versions.items.find((version) => version.id === id)!
+  current.projectors = doc.projectors
+  doc.projectors = next.projectors!
+  delete next.projectors
+  versions.activeId = id
+  if (!doc.projectors.some((p) => p.id === doc.settings.analysisProjector))
+    doc.settings.analysisProjector = 'all'
+}
+export function switchProjectorVersion(id: string) {
+  const versions = get(editor).doc.projectorVersions
+  if (!versions || versions.activeId === id || !versions.items.some((v) => v.id === id)) return
+  endEdit()
+  const name = versions.items.find((v) => v.id === id)!.name
+  commit(`Switched to ${name}`, (doc) => activateProjectorVersion(doc, id))
+}
+export function createProjectorVersion(empty = false) {
+  endEdit()
+  const id = uid()
+  commit(empty ? 'Created empty projector version' : 'Duplicated projector version', (doc) => {
+    const versions = ensureProjectorVersions(doc)
+    let number = versions.items.length + 1
+    let name = `Version ${String(number).padStart(2, '0')}`
+    while (versions.items.some((v) => v.name === name))
+      name = `Version ${String(++number).padStart(2, '0')}`
+    versions.items.push({ id, name, projectors: empty ? [] : structuredClone(doc.projectors) })
+    activateProjectorVersion(doc, id)
+  })
+}
+export function renameProjectorVersion(name: string) {
+  const versions = get(editor).doc.projectorVersions
+  const current = versions?.items.find((v) => v.id === versions.activeId)
+  name = name.trim()
+  if (!current || !name || current.name === name) return
+  endEdit()
+  commit('Renamed projector version', (doc) => {
+    const versions = ensureProjectorVersions(doc)
+    versions.items.find((v) => v.id === versions.activeId)!.name = name
+  })
+}
+export function deleteProjectorVersion() {
+  const versions = get(editor).doc.projectorVersions
+  if (!versions || versions.items.length < 2) return
+  endEdit()
+  commit('Deleted projector version · Undo to restore', (doc) => {
+    const versions = ensureProjectorVersions(doc)
+    const index = versions.items.findIndex((v) => v.id === versions.activeId)
+    const id = versions.activeId
+    activateProjectorVersion(doc, versions.items[index > 0 ? index - 1 : 1].id)
+    versions.items = versions.items.filter((v) => v.id !== id)
+  })
+}
+export function moveProjector(id: string, index: number) {
+  const projectors = get(editor).doc.projectors
+  const from = projectors.findIndex((p) => p.id === id)
+  const to = Math.max(0, Math.min(projectors.length - 1, Math.trunc(index)))
+  if (from < 0 || from === to || !Number.isFinite(to)) return
+  endEdit()
+  commit('Reordered projectors', (doc) => {
+    const [projector] = doc.projectors.splice(from, 1)
+    doc.projectors.splice(to, 0, projector)
+  })
 }
 export function toggleProjector(p: ProjectorConfig) {
   if (!p.enabled && get(editor).doc.projectors.filter((x) => x.enabled).length >= 8)

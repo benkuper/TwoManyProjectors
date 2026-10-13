@@ -38,10 +38,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { acceleratedRaycast } from 'three-mesh-bvh'
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import { editor, commit, select, updateUI, type EditorState } from './store'
 import { runtimeAssets } from './assets'
 import { ProjectionSystem } from './projection'
+import { analysisProjectors } from './analysis'
+import { projectorHeight, type HeightOverlay } from './height-measurement'
 import { SelectionOutline } from './selection-outline'
 import { selectionPivot, transformSelection } from './selection-transform'
 import { aimRotation, pixelFootprint, projectionEnvelope, projectorCamera } from './optics'
@@ -98,6 +100,8 @@ const pointDepth = () =>
     fragmentShader: `${ShaderChunk.packing}\nvoid main(){if(length(gl_PointCoord-.5)>.45)discard;gl_FragColor=packDepthToRGBA(gl_FragCoord.z);}`
   })
 export let currentViewport: ViewportEngine | undefined
+const defaultSplatPixelSize = 2
+const defaultSplatScale = 0.4
 
 export class ViewportEngine {
   controls: OrbitControls
@@ -111,6 +115,8 @@ export class ViewportEngine {
   selection = new SelectionOutline()
   calibrationHelpers = new Group()
   calibrationKey = ''
+  heightMeasurements = writable<HeightOverlay[]>([])
+  heightMeasurementKey = ''
   spark: SparkRenderer
   dirtyDepth = true
   dirtySplats = true
@@ -129,7 +135,7 @@ export class ViewportEngine {
   pointerManipulated = false
   manipulating = false
   previewRatio = Math.min(1, window.devicePixelRatio)
-  splatPixelSize = 2
+  splatPixelSize = defaultSplatPixelSize
   slowFrames = 0
   disposed = false
   fpsFrames = 0
@@ -172,7 +178,7 @@ export class ViewportEngine {
     this.spark = new SparkRenderer({
       renderer,
       onDirty: invalidate,
-      lodSplatScale: 0.4,
+      lodSplatScale: defaultSplatScale,
       // Picking uses our BVH proxy; Spark's separate raycast LOD is unused.
       lodRaycast: 0
     })
@@ -266,10 +272,13 @@ export class ViewportEngine {
     this.unsubscribe = editor.subscribe((s) => {
       const old = this.state
       this.state = s
+      if (s.documentGeneration !== old.documentGeneration) this.projection.cameras.stopAll()
       if (s.interacting !== old.interacting) {
         if (s.interacting) this.lowQuality()
         else this.fullQuality()
       }
+      if (s.doc.settings.dynamicRenderingQuality !== old.doc.settings.dynamicRenderingQuality)
+        this.updateRenderQuality()
       if (
         !initialized ||
         s.doc !== old.doc ||
@@ -296,12 +305,23 @@ export class ViewportEngine {
     if (this.manipulating) return
     this.manipulating = true
     this.slowFrames = 0
-    this.setRenderRatio(Math.min(this.previewRatio, window.devicePixelRatio))
-    this.invalidate()
+    this.updateRenderQuality()
   }
   fullQuality = () => {
     this.manipulating = false
-    this.setRenderRatio(Math.min(1.75, window.devicePixelRatio))
+    this.updateRenderQuality()
+  }
+  updateRenderQuality() {
+    const dynamic = this.state.doc.settings.dynamicRenderingQuality
+    if (!dynamic) {
+      this.previewRatio = Math.min(1, window.devicePixelRatio)
+      this.splatPixelSize = defaultSplatPixelSize
+      this.spark.lodSplatScale = defaultSplatScale
+      this.slowFrames = 0
+    }
+    this.setRenderRatio(
+      Math.min(dynamic && this.manipulating ? this.previewRatio : 1.75, window.devicePixelRatio)
+    )
     this.invalidate()
   }
   setRenderRatio(ratio: number) {
@@ -366,6 +386,25 @@ export class ViewportEngine {
         .filter((o) => o.locked)
         .map((o) => o.id)
     )
+    if (this.state.tool === 'height-reference') {
+      const projector = this.state.doc.projectors.find((p) => p.id === this.state.selected)
+      if (!projector || projector.locked) return
+      const nodeId = surface && this.nodeId(surface.object)
+      const group = nodeId && this.nodes.get(nodeId)?.group
+      if (!surface || !nodeId || !group) {
+        updateUI({ error: 'Pick a point on a visible surface, or choose Ground in Height measurement.' })
+        return
+      }
+      const point = group.worldToLocal(surface.point.clone()).toArray() as Vec3
+      commit('Height reference point picked', (doc) => {
+        doc.projectors.find((p) => p.id === projector.id)!.heightMeasurement = {
+          visible: true,
+          reference: { nodeId, point }
+        }
+      })
+      updateUI({ tool: 'select', error: '' })
+      return
+    }
     if (this.state.tool === 'probe' && surface) {
       updateUI({ probe: this.probe(surface) })
       return
@@ -629,7 +668,8 @@ export class ViewportEngine {
       }
       apply(group, p.transform)
     }
-    if (this.projection.update(doc, selected, this.onProjectionChange)) this.dirtySplats = true
+    if (this.projection.update(doc, this.state.selectedIds, this.onProjectionChange))
+      this.dirtySplats = true
     const depthKey = JSON.stringify([
       doc.nodes.map((n) => [n.id, n.transform, n.visible, this.nodes.get(n.id)?.key]),
       doc.projectors
@@ -690,6 +730,9 @@ export class ViewportEngine {
       this.transform.setRotationSnap(doc.settings.snap ? Math.PI / 12 : null)
       this.transform.setScaleSnap(doc.settings.snap ? 0.1 : null)
     } else this.transform.detach()
+    this.transform.enabled = tool !== 'height-reference'
+    if (tool === 'height-reference') this.transform.axis = null
+    this.transform.getHelper().visible = !!target?.visible && tool !== 'height-reference'
     // Highlight only the projector body, leaving frustum helpers out of the silhouette.
     this.selection.setTargets(
       selectedObjects.flatMap((o) => {
@@ -907,7 +950,8 @@ export class ViewportEngine {
   tick(delta: number) {
     if (this.disposed || this.state.contextLost) return
     this.controls.update()
-    if (this.manipulating) {
+    this.updateHeightMeasurements()
+    if (this.manipulating && this.state.doc.settings.dynamicRenderingQuality) {
       this.slowFrames = delta > 1 / 50 ? this.slowFrames + 1 : Math.max(0, this.slowFrames - 1)
       if (this.slowFrames >= 6 && (this.previewRatio > 0.5 || this.spark.lodSplatScale > 0.1)) {
         this.previewRatio = Math.max(0.5, this.previewRatio * 0.8)
@@ -932,7 +976,7 @@ export class ViewportEngine {
               : x
           )
         }
-        if (this.projection.update(doc, this.state.selected, this.onProjectionChange))
+        if (this.projection.update(doc, this.state.selectedIds, this.onProjectionChange))
           this.dirtySplats = true
       }
       this.dirtyDepth = true
@@ -1064,29 +1108,32 @@ export class ViewportEngine {
       point = hit.point,
       node = this.state.doc.nodes.find((n) => n.id === this.nodeId(hit.object))
     let lux = 0,
+      overlap = 0,
       density: AnalysisSample['density'] = null,
       distortion: number | null = null,
       mm: AnalysisSample['millimetresPerPixel'] = null
     const results: AnalysisSample['projectors'] = [],
-      chosen =
-        this.state.doc.settings.analysisProjector === 'all'
-          ? this.state.selected
-          : this.state.doc.settings.analysisProjector
+      chosen = new Set(analysisProjectors(this.state.doc, this.state.selectedIds).map((p) => p.id))
     for (const p of this.projection.projectors) {
       const f = normal ? pixelFootprint(p, point, normal) : null,
         blocked = f ? this.occluded(p, point) : false
-      results.push({ id: p.id, lux: f && !blocked ? f.lux : 0, occluded: blocked })
+      results.push({
+        id: p.id,
+        lux: f && !blocked ? f.lux : 0,
+        occluded: blocked,
+        density: f && !blocked ? f.density : null,
+        millimetresPerPixel: f && !blocked ? f.millimetresPerPixel : null,
+        distortion: f && !blocked ? f.distortion : null
+      })
       if (f && !blocked) {
-        if (this.state.doc.settings.analysisProjector === 'all' || p.id === chosen) lux += f.lux
-        if (
-          p.id === chosen ||
-          (chosen &&
-            !this.projection.projectors.some((p) => p.id === chosen) &&
-            p.id === this.projection.projectors[0]?.id)
-        ) {
-          density = f.density
-          distortion = f.distortion
-          mm = f.millimetresPerPixel
+        overlap++
+        if (this.state.doc.settings.analysisProjector === 'all' || chosen.has(p.id)) lux += f.lux
+        if (chosen.has(p.id)) {
+          if (!density || Math.min(...f.density) > Math.min(...density)) {
+            density = f.density
+            mm = f.millimetresPerPixel
+          }
+          distortion = Math.max(distortion ?? 0, f.distortion)
         }
       }
     }
@@ -1095,6 +1142,7 @@ export class ViewportEngine {
       normal: normal?.toArray() ?? null,
       confidence,
       lux: normal ? lux : null,
+      overlap: normal ? overlap : null,
       density,
       millimetresPerPixel: mm,
       distortion,
@@ -1128,9 +1176,60 @@ export class ViewportEngine {
     }
     return flux
   }
+  updateHeightMeasurements() {
+    const { doc } = this.state
+    const measurements: HeightOverlay[] = []
+    // Project into CSS pixels so annotation text and strokes remain legible at any zoom/DPR.
+    const width = this.renderer.domElement.clientWidth,
+      height = this.renderer.domElement.clientHeight
+    this.camera.updateMatrixWorld()
+    const project = (point: Vector3): [number, number] | null => {
+      const ndc = point.clone().project(this.camera)
+      if (![ndc.x, ndc.y, ndc.z].every(Number.isFinite) || ndc.z < -1 || ndc.z > 1) return null
+      return [((ndc.x + 1) * width) / 2, ((1 - ndc.y) * height) / 2]
+    }
+    for (const projector of doc.projectors) {
+      if (!projector.heightMeasurement?.visible) continue
+      const group = this.projectors.get(projector.id)
+      const referenceId = projector.heightMeasurement.reference?.nodeId
+      const referenceGroup = referenceId ? this.nodes.get(referenceId)?.group : undefined
+      const measurement = projectorHeight(
+        projector,
+        doc.nodes,
+        group ? read(group) : projector.transform,
+        referenceGroup ? read(referenceGroup) : undefined
+      )
+      if (!measurement) continue
+      const origin = project(measurement.origin),
+        base = project(measurement.base)
+      if (!origin || !base) continue
+      if (
+        (origin[0] < 0 && base[0] < 0) ||
+        (origin[0] > width && base[0] > width) ||
+        (origin[1] < 0 && base[1] < 0) ||
+        (origin[1] > height && base[1] > height)
+      )
+        continue
+      measurements.push({
+        id: projector.id,
+        name: projector.name,
+        height: measurement.height,
+        referenceName: measurement.referenceName,
+        origin,
+        base,
+        point: measurement.point ? project(measurement.point) : null
+      })
+    }
+    const key = JSON.stringify(measurements)
+    if (key !== this.heightMeasurementKey) {
+      this.heightMeasurementKey = key
+      this.heightMeasurements.set(measurements)
+    }
+  }
   dispose() {
     this.disposed = true
     this.unsubscribe()
+    this.heightMeasurements.set([])
     this.controls.dispose()
     this.transform.dispose()
     this.transform.getHelper().removeFromParent()

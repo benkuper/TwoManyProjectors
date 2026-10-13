@@ -6,7 +6,21 @@ import { materials } from '../../src/lib/types'
 // Exercise Spark's real generator and output conversion, reading linear RGB like the mesh fixture.
 export async function splatAmbientSample(
   engine: ViewportEngine,
-  { size = 1, opacity = 1, sourceOpacity = 1, offset = 0 } = {}
+  {
+    size = 1,
+    opacity = 1,
+    sourceOpacity = 1,
+    offset = 0,
+    projected = false,
+    point = [0, 0, 0]
+  }: {
+    size?: number
+    opacity?: number
+    sourceOpacity?: number
+    offset?: number
+    projected?: boolean
+    point?: [number, number, number]
+  } = {}
 ) {
   const renderer = engine.renderer,
     scene = new Scene(),
@@ -18,10 +32,11 @@ export async function splatAmbientSample(
     oldAlpha = renderer.getClearAlpha(),
     uniforms = engine.projection.uniforms,
     previous = [uniforms.tmpCount.value, uniforms.tmpMode.value, uniforms.tmpResponse.value]
-  camera.position.z = 3
+  camera.position.set(point[0], point[1], point[2] + 3)
+  camera.lookAt(...point)
   camera.updateMatrixWorld(true)
   splats.pushSplat(
-    new Vector3(),
+    new Vector3(...point),
     new Vector3(0.5, 0.5, 0.05),
     new Quaternion(),
     sourceOpacity,
@@ -36,12 +51,16 @@ export async function splatAmbientSample(
   scene.add(mesh, spark)
   mesh.opacity = opacity
   try {
-    uniforms.tmpCount.value = 0
-    uniforms.tmpMode.value = 0
-    uniforms.tmpResponse.value = true
+    if (!projected) {
+      uniforms.tmpCount.value = 0
+      uniforms.tmpMode.value = 0
+      uniforms.tmpResponse.value = true
+    }
     renderer.setRenderTarget(target)
     renderer.setClearColor(0, 1)
     await spark.update({ scene, camera })
+    // The studio may draw while Spark awaits its worker and restore the canvas target.
+    renderer.setRenderTarget(target)
     renderer.render(scene, camera)
     const pixel = new Uint8Array(4)
     renderer.readRenderTargetPixels(target, 16 + offset, 16, 1, 1, pixel)

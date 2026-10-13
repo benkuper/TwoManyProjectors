@@ -1,8 +1,8 @@
 import { zip, unzip, strToU8, strFromU8 } from 'fflate'
 import { get } from 'svelte/store'
-import { editor, replaceDocument, updateUI } from './store'
+import { editor, ensureProjectorVersions, replaceDocument, updateUI } from './store'
 import { loadAsset, originalFiles, runtimeAssets, type RuntimeAsset } from './assets'
-import type { SceneDocument } from './types'
+import type { ProjectorConfig, SceneDocument, SceneNode } from './types'
 import { makeCustomSpec } from './catalogue'
 import { constrainShift } from './optics'
 
@@ -26,12 +26,14 @@ export function validateDocument(value: unknown): SceneDocument {
   const finite = (n: unknown) => typeof n === 'number' && Number.isFinite(n),
     tuple = (a: unknown, n: number) => Array.isArray(a) && a.length === n && a.every(finite)
   const ids = new Set<string>()
-  for (const o of [...d.nodes, ...d.projectors, ...d.assets]) {
+  const validateIdentity = (o: { id: string; name: string }, ids: Set<string>) => {
+    if (!o || typeof o !== 'object') fail('invalid scene object')
     if (typeof o.id !== 'string' || ids.has(o.id)) fail('duplicate or missing object ID')
     ids.add(o.id)
     if (typeof o.name !== 'string') fail('missing object name')
   }
-  for (const o of [...d.nodes, ...d.projectors]) {
+  for (const o of [...d.nodes, ...d.projectors, ...d.assets]) validateIdentity(o, ids)
+  const validateTransform = (o: SceneNode | ProjectorConfig) => {
     if (o.locked === undefined) o.locked = false
     if (typeof o.locked !== 'boolean') fail('invalid object lock')
     if (
@@ -45,6 +47,7 @@ export function validateDocument(value: unknown): SceneDocument {
     const q = o.transform.rotation
     if (Math.abs(Math.hypot(...q) - 1) > 0.001) fail('rotation quaternion must be normalized')
   }
+  for (const o of [...d.nodes, ...d.projectors]) validateTransform(o)
   for (const n of d.nodes) {
     if (
       !['plane', 'box', 'cylinder', 'mesh', 'cloud', 'splat'].includes(n.kind) ||
@@ -73,8 +76,24 @@ export function validateDocument(value: unknown): SceneDocument {
     )
       fail('invalid surface material')
   }
-  if (d.projectors.filter((p) => p.enabled).length > 8) fail('more than eight enabled projectors')
-  for (const p of d.projectors) {
+  const validateProjectors = (projectors: ProjectorConfig[]) => {
+    if (projectors.length > 1000) fail('too many projectors in version')
+    if (projectors.filter((p) => p.enabled).length > 8) fail('more than eight enabled projectors')
+    for (const p of projectors) {
+    if (typeof p.enabled !== 'boolean') fail('invalid projector enabled state')
+    if (p.heightMeasurement !== undefined) {
+      const measurement = p.heightMeasurement
+      if (
+        !measurement ||
+        typeof measurement.visible !== 'boolean' ||
+        (measurement.reference !== null &&
+          (!measurement.reference ||
+            typeof measurement.reference.nodeId !== 'string' ||
+            !measurement.reference.nodeId ||
+            !tuple(measurement.reference.point, 3)))
+      )
+        fail('invalid projector height measurement')
+    }
     // Existing v1 projects keep the smooth preview and use 120 px square cells.
     p.nativePixelPreview ??= false
     p.patternCellSize ??= 120
@@ -103,9 +122,17 @@ export function validateDocument(value: unknown): SceneDocument {
       !Number.isInteger(p.patternCellSize) ||
       p.patternCellSize < 8 ||
       p.patternCellSize > 4096 ||
-      !['grid', 'checker', 'crosshair', 'alignment', 'bars', 'white', 'image'].includes(p.pattern)
+      !['grid', 'checker', 'uvmap', 'crosshair', 'alignment', 'bars', 'white', 'image', 'camera'].includes(
+        p.pattern
+      )
     )
       fail('invalid projector optics')
+    if (!['contain', 'cover', 'stretch'].includes(p.imageFit)) fail('invalid projection media fit')
+    if (
+      p.camera !== undefined &&
+      (!p.camera || typeof p.camera.deviceId !== 'string' || typeof p.camera.label !== 'string')
+    )
+      fail('invalid camera preference')
     if (
       !s.shift ||
       !finite(s.shift.horizontal) ||
@@ -121,7 +148,9 @@ export function validateDocument(value: unknown): SceneDocument {
     }
     if (p.imageId && !d.assets.some((a) => a.id === p.imageId && a.kind === 'image'))
       fail('missing projection image')
+    }
   }
+  validateProjectors(d.projectors)
   for (const a of d.assets) {
     if (
       !['mesh', 'cloud', 'splat', 'image'].includes(a.kind) ||
@@ -136,21 +165,74 @@ export function validateDocument(value: unknown): SceneDocument {
         fail('unsafe asset path')
   }
   const s = d.settings
+  if (s && s.dynamicRenderingQuality === undefined) s.dynamicRenderingQuality = false
   if (
     !s ||
-    !['preview', 'lux', 'density', 'distortion'].includes(s.analysis) ||
+    !['preview', 'lux', 'density', 'distortion', 'overlap'].includes(s.analysis) ||
     !tuple(s.range, 2) ||
     s.range[1] <= s.range[0] ||
     typeof s.materialResponse !== 'boolean' ||
     typeof s.grid !== 'boolean' ||
+    typeof s.dynamicRenderingQuality !== 'boolean' ||
     typeof s.snap !== 'boolean'
   )
     fail('invalid analysis settings')
+  if (s.luxDisplay === undefined) s.luxDisplay = 'smooth'
+  if (s.luxTarget === undefined) s.luxTarget = [80, 120]
+  if (
+    !['smooth', 'bands', 'target'].includes(s.luxDisplay) ||
+    !tuple(s.luxTarget, 2) ||
+    s.luxTarget[0] < 0 ||
+    s.luxTarget[1] <= s.luxTarget[0]
+  )
+    fail('invalid lux display settings')
   // Migrate existing v1 projects to shared viewport visualization settings.
   s.volumeOpacity ??= d.projectors[0]?.volumeOpacity ?? 0.045
   s.outlineOpacity ??= 0.32
   if (![s.volumeOpacity, s.outlineOpacity].every((v) => finite(v) && v >= 0 && v <= 1))
     fail('invalid frustum opacity')
+  if (s.shadowBoost === undefined) s.shadowBoost = 1
+  if (!finite(s.shadowBoost) || s.shadowBoost < 1 || s.shadowBoost > 10)
+    fail('invalid shadow boost')
+  if (s.shadowHighlight === undefined) s.shadowHighlight = false
+  if (typeof s.shadowHighlight !== 'boolean') fail('invalid shadow highlight')
+  if (d.projectorVersions !== undefined) {
+    const versions = d.projectorVersions
+    if (
+      !versions ||
+      typeof versions.activeId !== 'string' ||
+      !Array.isArray(versions.items) ||
+      !versions.items.length ||
+      versions.items.length > 1000
+    )
+      fail('invalid projector versions')
+    const versionIds = new Set<string>()
+    for (const version of versions.items) {
+      if (
+        !version ||
+        typeof version.id !== 'string' ||
+        !version.id ||
+        versionIds.has(version.id) ||
+        typeof version.name !== 'string' ||
+        !version.name.trim()
+      )
+        fail('duplicate or invalid projector version')
+      versionIds.add(version.id)
+      if (version.id === versions.activeId) {
+        if (version.projectors !== undefined) fail('active projector version must use scene projectors')
+      } else {
+        if (!Array.isArray(version.projectors)) fail('missing projectors in version')
+        const setupIds = new Set([...d.nodes, ...d.assets].map((o) => o.id))
+        for (const projector of version.projectors!) {
+          validateIdentity(projector, setupIds)
+          validateTransform(projector)
+        }
+        validateProjectors(version.projectors!)
+      }
+    }
+    if (!versionIds.has(versions.activeId)) fail('missing active projector version')
+  }
+  ensureProjectorVersions(d)
   return d
 }
 function download(blob: Blob, name: string) {

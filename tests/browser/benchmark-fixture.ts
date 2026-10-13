@@ -16,7 +16,7 @@ export async function benchmark(e: ViewportEngine) {
     id: `benchmark-${i}`,
     transform: { ...structuredClone(base.transform), position: [(i - 3.5) * 0.2, 2.2, 6] }
   }))
-  e.projection.update(doc, base.id, e.invalidate)
+  e.projection.update(doc, [base.id], e.invalidate)
   const geometry = new SphereGeometry(0.65, 512, 512)
   for (let i = 0; i < 4; i++) {
     const group = new Group(),

@@ -13,8 +13,11 @@
     Eye,
     EyeOff,
     FolderOpen,
+    Gauge,
     Grid2X2,
+    GripVertical,
     Home,
+    Highlighter,
     Layers,
     Lock,
     LockOpen,
@@ -38,10 +41,13 @@
   import Scene from './components/Scene.svelte'
   import Inspector from './components/Inspector.svelte'
   import NumberField from './components/NumberField.svelte'
+  import ProjectorVersions from './components/ProjectorVersions.svelte'
+  import HeightMeasurements from './components/HeightMeasurements.svelte'
   import {
     editor,
     addNode,
     addProjector,
+    moveProjector,
     commit,
     beginEdit,
     endEdit,
@@ -61,7 +67,16 @@
   import { importFiles, cancelImport, addAssetToScene } from './lib/assets'
   import { autosave, hydrate, openProject, readRecovery, saveProject } from './lib/persistence'
   import { scaleAroundAnchor } from './lib/optics'
-  import type { AssetRecord, AnalysisMode, SceneDocument } from './lib/types'
+  import { analysisProjectors } from './lib/analysis'
+  import {
+    luxBandColors,
+    luxTargetColors,
+    overlapColors,
+    type AssetRecord,
+    type AnalysisMode,
+    type LuxDisplay,
+    type SceneDocument
+  } from './lib/types'
   import type { ViewportEngine } from './lib/engine'
   let engine = $state.raw<ViewportEngine>(),
     assetInput: HTMLInputElement,
@@ -74,6 +89,9 @@
     up = $state<AssetRecord['upAxis']>('y'),
     dragging = $state(false)
   const assetDragType = 'application/x-twomanyprojectors-asset'
+  const projectorDragType = 'application/x-twomanyprojectors-projector'
+  let draggedProjector = $state<string | null>(null)
+  let projectorDrop = $state<{ id: string; after: boolean } | null>(null)
   let realDistance = $state(1),
     calibrationUnit = $state('m')
   let treeWidth = $state(244),
@@ -83,6 +101,13 @@
     [...$editor.doc.nodes, ...$editor.doc.projectors].find((n) => n.id === $editor.selected)
   )
   const activeCount = $derived($editor.doc.projectors.filter((p) => p.enabled).length)
+  const analysisScope = $derived(analysisProjectors($editor.doc, $editor.selectedIds))
+  const luxTargetView = $derived(
+    $editor.doc.settings.analysis === 'lux' && $editor.doc.settings.luxDisplay === 'target'
+  )
+  const analysisRange = $derived(
+    luxTargetView ? $editor.doc.settings.luxTarget : $editor.doc.settings.range
+  )
   const measured = $derived(
     $editor.calibration.length === 2
       ? new Vector3()
@@ -101,15 +126,22 @@
     { id: 'preview', label: 'Projection' },
     { id: 'lux', label: 'Illuminance' },
     { id: 'density', label: 'Pixel density' },
-    { id: 'distortion', label: 'Distortion' }
+    { id: 'distortion', label: 'Distortion' },
+    { id: 'overlap', label: 'Overlap' }
   ]
   function setting(patch: Partial<SceneDocument['settings']>) {
     commit('View settings updated', (d) => Object.assign(d.settings, patch))
   }
+  function analysisLimit(index: 0 | 1, value: number) {
+    const range: [number, number] = [...analysisRange]
+    range[index] = value
+    if (range[0] >= range[1] || (luxTargetView && range[0] < 0)) return
+    setting(luxTargetView ? { luxTarget: range } : { range })
+  }
   function mode(value: AnalysisMode) {
     setting({
       analysis: value,
-      range: value === 'density' ? [0, 500] : value === 'distortion' ? [1, 5] : [0, 500]
+      range: value === 'overlap' ? [0, 8] : value === 'distortion' ? [1, 5] : [0, 500]
     })
   }
   function chooseFiles(event: Event) {
@@ -145,6 +177,37 @@
     if (!event.dataTransfer) return
     event.dataTransfer.setData(assetDragType, id)
     event.dataTransfer.effectAllowed = 'copy'
+  }
+  function dragProjector(event: DragEvent, id: string) {
+    if (!event.dataTransfer) return
+    endEdit()
+    event.dataTransfer.setData(projectorDragType, id)
+    event.dataTransfer.effectAllowed = 'move'
+    draggedProjector = id
+  }
+  function projectorDragOver(event: DragEvent, id: string) {
+    if (!event.dataTransfer?.types.includes(projectorDragType)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    projectorDrop = { id, after: event.clientY >= rect.top + rect.height / 2 }
+  }
+  function dropProjector(event: DragEvent, id: string) {
+    if (!event.dataTransfer?.types.includes(projectorDragType)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const projectors = $editor.doc.projectors
+    const from = projectors.findIndex(
+      (p) => p.id === event.dataTransfer!.getData(projectorDragType)
+    )
+    const target = projectors.findIndex((p) => p.id === id)
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const insertion = target + (event.clientY >= rect.top + rect.height / 2 ? 1 : 0)
+    if (from >= 0 && target >= 0)
+      moveProjector(projectors[from].id, insertion - (from < insertion ? 1 : 0))
+    draggedProjector = null
+    projectorDrop = null
   }
   function focusAsset(id: string) {
     const node = $editor.doc.nodes.find((n) => n.assetId === id)
@@ -198,6 +261,10 @@
   }
   function keyboard(event: KeyboardEvent) {
     if (event.key === 'Escape') {
+      if ($editor.tool === 'height-reference') {
+        updateUI({ tool: 'select', error: '', notice: 'Height reference picking cancelled' })
+        return
+      }
       if (engine?.transform.dragging) {
         engine.transform.reset()
         engine.transform.pointerUp(null)
@@ -374,6 +441,7 @@
           >
         </div>
       </div>
+      <ProjectorVersions />
       <div class="scene-actions">
         <button class="add-projector" onclick={() => addProjector()}
           ><Plus size={14} /> Add projector</button
@@ -398,12 +466,38 @@
         <div class="tree-section">
           <ChevronDown size={13} /><span>PROJECTORS</span><small>{activeCount}/8</small>
         </div>
-        {#each $editor.doc.projectors as p}<div
+        {#each $editor.doc.projectors as p, index (p.id)}<div
             class="tree-row"
+            class:projector-dragging={draggedProjector === p.id}
+            class:drop-before={projectorDrop?.id === p.id && !projectorDrop.after}
+            class:drop-after={projectorDrop?.id === p.id && projectorDrop.after}
             class:selected={$editor.selectedIds.includes(p.id)}
             class:muted={!p.enabled}
             class:locked={p.locked}
+            role="listitem"
+            ondragover={(e) => projectorDragOver(e, p.id)}
+            ondragleave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) projectorDrop = null
+            }}
+            ondrop={(e) => dropProjector(e, p.id)}
           >
+            <button
+              class="projector-reorder"
+              aria-label={`Reorder ${p.name}`}
+              title="Drag to reorder · Arrow Up / Down to move"
+              draggable="true"
+              ondragstart={(e) => dragProjector(e, p.id)}
+              ondragend={() => {
+                draggedProjector = null
+                projectorDrop = null
+              }}
+              onkeydown={(e) => {
+                if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+                e.preventDefault()
+                e.stopPropagation()
+                moveProjector(p.id, index + (e.key === 'ArrowUp' ? -1 : 1))
+              }}><GripVertical size={12} /></button
+            >
             <button
               class="tree-select"
               aria-pressed={$editor.selectedIds.includes(p.id)}
@@ -528,6 +622,7 @@
             >
           </div>{/snippet}
       </svelte:boundary>
+      {#if engine}<HeightMeasurements {engine} />{/if}
       <div class="viewport-tools">
         <div class="tool-options">
           {#each tools as tool}<button
@@ -586,6 +681,11 @@
       {#if $editor.tool === 'probe'}<div class="instruction-chip">
           <Crosshair size={15} /> Click a receiver to sample light and pixels
         </div>{/if}
+      {#if $editor.tool === 'height-reference'}<div class="instruction-chip">
+          <Ruler size={15} /> Pick a surface point as the height reference · Esc to cancel
+          <button aria-label="Cancel height reference picking" onclick={() => updateUI({ tool: 'select', error: '' })}
+            ><X size={13} /></button>
+        </div>{/if}
       {#if $editor.tool === 'calibrate'}<div class="calibration-card floating-card">
           <div class="floating-title">
             <Ruler size={15} /> Two-point scale
@@ -638,6 +738,10 @@
           </div>
           <dl>
             <div>
+              <dt>Projector count</dt>
+              <dd>{$editor.probe.overlap ?? '—'}</dd>
+            </div>
+            <div>
               <dt>Density X / Y</dt>
               <dd>{$editor.probe.density?.map((v) => v.toFixed(1)).join(' / ') ?? '—'} px/m</dd>
             </div>
@@ -656,15 +760,33 @@
               <dd>{$editor.probe.luminance?.toFixed(1) ?? '—'} cd/m²</dd>
             </div>
           </dl>
+          {#if analysisScope.length > 1}
+            <details class="probe-projectors">
+              <summary>Per-projector density</summary>
+              <dl>
+                {#each analysisScope as p}
+                  {@const sample = $editor.probe.projectors.find((sample) => sample.id === p.id)}
+                  <div>
+                    <dt>{p.name}</dt>
+                    <dd>
+                      {sample?.occluded
+                        ? 'Occluded'
+                        : sample?.density
+                          ? `${sample.density.map((v) => v.toFixed(1)).join(' / ')} px/m`
+                          : 'Outside coverage'}
+                    </dd>
+                  </div>
+                {/each}
+              </dl>
+            </details>
+          {/if}
           <small class="help"
             >Position {$editor.probe.point.map((v) => v.toFixed(2)).join(', ')} m</small
           >
           <p class="help">
-            Density/distortion: {$editor.doc.projectors.find(
-              (p) => p.id === $editor.doc.settings.analysisProjector || p.id === $editor.selected
-            )?.name ??
-              $editor.doc.projectors.find((p) => p.enabled)?.name ??
-              'No projector'}. Scan depth is approximate.
+            Density/distortion: {analysisScope.length > 1
+              ? `best density / worst distortion across ${analysisScope.length} projectors`
+              : (analysisScope[0]?.name ?? 'No enabled projector')}. Scan depth is approximate.
           </p>
         </div>{/if}
       {#if $editor.doc.settings.analysis !== 'preview'}<div class="legend-card floating-card">
@@ -674,49 +796,118 @@
                 ? 'lux'
                 : $editor.doc.settings.analysis === 'density'
                   ? 'px/m'
-                  : 'ratio'}</span
+                  : $editor.doc.settings.analysis === 'overlap'
+                    ? 'projectors'
+                    : 'ratio'}</span
             >
           </div>
-          <label class="stack-label"
-            >{$editor.doc.settings.analysis === 'lux' ? 'Light contributions' : 'Projector'}<select
-              aria-label="Analysis projector"
-              value={$editor.doc.settings.analysisProjector}
-              onchange={(e) => setting({ analysisProjector: e.currentTarget.value })}
-              >{#if $editor.doc.settings.analysis === 'lux'}<option value="all"
-                  >All enabled projectors · sum</option
-                >{:else}<option value="all">Selected projector (or first enabled)</option
-                >{/if}{#each $editor.doc.projectors.filter((p) => p.enabled) as p}<option
-                  value={p.id}>{p.name}</option
-                >{/each}</select
-            ></label
-          >
-          <div class="heat-gradient"></div>
-          <div class="field-grid">
-            <NumberField
-              label="Range min"
-              value={$editor.doc.settings.range[0]}
-              step={1}
-              oncommit={(v) => {
-                if (v < $editor.doc.settings.range[1])
-                  setting({ range: [v, $editor.doc.settings.range[1]] })
-              }}
-            /><NumberField
-              label="Range max"
-              value={$editor.doc.settings.range[1]}
-              step={1}
-              oncommit={(v) => {
-                if (v > $editor.doc.settings.range[0])
-                  setting({ range: [$editor.doc.settings.range[0], v] })
-              }}
-            />
-          </div>
-          <p class="help">
-            {$editor.doc.settings.analysis === 'density'
-              ? 'Lower directional density (X/Y). Native resolution.'
-              : $editor.doc.settings.analysis === 'distortion'
-                ? 'Largest / smallest pixel footprint. Square pixels = 1.'
-                : 'Uniform flux per native pixel. Planning estimate.'}
-          </p>
+          {#if $editor.doc.settings.analysis === 'overlap'}
+            <div class="overlap-legend" role="list" aria-label="Projector overlap legend">
+              {#each overlapColors as color, count}
+                <div role="listitem" title={`${count} ${count === 1 ? 'projector' : 'projectors'}`}>
+                  <i style:background={color}></i><span>{count}</span>
+                </div>
+              {/each}
+            </div>
+            <p class="help">
+              All enabled projectors. Counts unblocked footprints, independent of brightness and
+              media. Gray indicates unreliable scan normals.
+            </p>
+          {:else}
+            <label class="stack-label"
+              >{$editor.doc.settings.analysis === 'lux'
+                ? 'Light contributions'
+                : 'Projector'}<select
+                aria-label="Analysis projector"
+                value={$editor.doc.settings.analysisProjector}
+                onchange={(e) => setting({ analysisProjector: e.currentTarget.value })}
+                >{#if $editor.doc.settings.analysis === 'lux'}<option value="all"
+                    >All enabled projectors · sum</option
+                  >{:else}<option value="all">Selected projectors (or all enabled)</option
+                  >{/if}{#each $editor.doc.projectors.filter((p) => p.enabled) as p}<option
+                    value={p.id}>{p.name}</option
+                  >{/each}</select
+              ></label
+            >
+            {#if $editor.doc.settings.analysis === 'lux'}
+              <label class="stack-label lux-display-control">Lux display<select
+                  aria-label="Lux display"
+                  value={$editor.doc.settings.luxDisplay}
+                  onchange={(e) => setting({ luxDisplay: e.currentTarget.value as LuxDisplay })}
+                >
+                  <option value="smooth">Smooth gradient</option>
+                  <option value="bands">Stepped bands</option>
+                  <option value="target">Target range</option>
+                </select></label
+              >
+            {/if}
+            {#if luxTargetView}
+              <div class="lux-target-legend" role="list" aria-label="Target lux legend">
+                {#each ['Below minimum', 'In range', 'Above maximum'] as label, index}
+                  <div role="listitem">
+                    <i style:background={luxTargetColors[index]}></i><span>{label}</span>
+                  </div>
+                {/each}
+              </div>
+            {:else if $editor.doc.settings.analysis === 'lux' && $editor.doc.settings.luxDisplay === 'bands'}
+              <div class="lux-band-legend" role="list" aria-label="Lux bands">
+                {#each luxBandColors as color, index}
+                  {@const low =
+                    analysisRange[0] +
+                    ((analysisRange[1] - analysisRange[0]) * index) / luxBandColors.length}
+                  {@const high =
+                    analysisRange[0] +
+                    ((analysisRange[1] - analysisRange[0]) * (index + 1)) / luxBandColors.length}
+                  <div
+                    role="listitem"
+                    style:background={color}
+                    title={`${low.toFixed(1)}–${high.toFixed(1)} lux`}
+                    aria-label={`${low.toFixed(1)} to ${high.toFixed(1)} lux`}
+                  ></div>
+                {/each}
+              </div>
+            {:else}
+              <div class="heat-gradient"></div>
+            {/if}
+            <div class="field-grid">
+              <NumberField
+                label={luxTargetView ? 'Minimum lux' : 'Range min'}
+                value={analysisRange[0]}
+                min={luxTargetView ? 0 : -Infinity}
+                step={1}
+                oncommit={(v) => analysisLimit(0, v)}
+              /><NumberField
+                label={luxTargetView ? 'Maximum lux' : 'Range max'}
+                value={analysisRange[1]}
+                min={luxTargetView ? 0 : -Infinity}
+                step={1}
+                oncommit={(v) => analysisLimit(1, v)}
+              />
+            </div>
+            <p class="help">
+              {$editor.doc.settings.analysis === 'density'
+                ? 'Lower directional density (X/Y). Highest density wins in overlaps. Native resolution.'
+                : $editor.doc.settings.analysis === 'distortion'
+                  ? 'Largest / smallest pixel footprint. Worst distortion wins in overlaps. Square pixels = 1.'
+                  : luxTargetView
+                    ? 'Your limits define the acceptable lux range. Unlit areas are below minimum. Gray indicates unreliable scan normals.'
+                    : $editor.doc.settings.luxDisplay === 'bands'
+                      ? 'Eight equal lux intervals with clear boundaries. Dark gray means no projection. White-field planning estimate.'
+                      : 'Uniform flux per native pixel. Dark gray means no projection. Planning estimate.'}
+            </p>
+            {#if $editor.doc.settings.analysis !== 'lux'}
+              <p class="help" aria-label="Analysis scope">
+                {analysisScope.length
+                  ? analysisScope.map((p) => p.name).join(', ')
+                  : 'No enabled projector in this scope.'}
+              </p>
+            {/if}
+          {/if}
+          {#if $editor.doc.settings.shadowHighlight}
+            <p class="help">Yellow marks projected shadows.</p>
+          {:else if $editor.doc.settings.shadowBoost > 1}
+            <p class="help">Shadow contrast boosted to {$editor.doc.settings.shadowBoost}×.</p>
+          {/if}
         </div>{/if}
       <div class="viewport-bottom">
         <div class="navigation-hint">
@@ -758,7 +949,40 @@
               oncommit={(v) => setting({ outlineOpacity: v })}
             />
           </div>
+          <div
+            class="viewport-parameter"
+            title="Darken projected shadows in every view. 1× is the original display; measurements are unchanged."
+          >
+            <NumberField
+              label="Shadow boost"
+              displayLabel="Shadows"
+              value={$editor.doc.settings.shadowBoost}
+              min={1}
+              max={10}
+              step={0.1}
+              suffix="×"
+              slider
+              oncommit={(v) => setting({ shadowBoost: v })}
+            />
+          </div>
           <div class="viewport-toggles">
+            <button
+              class:active={$editor.doc.settings.dynamicRenderingQuality}
+              aria-pressed={$editor.doc.settings.dynamicRenderingQuality}
+              title="Reduce rendering quality while moving the camera or objects for smoother interaction with complex models and Gaussian scans"
+              aria-label="Dynamic rendering quality"
+              onclick={() =>
+                setting({ dynamicRenderingQuality: !$editor.doc.settings.dynamicRenderingQuality })}
+              ><Gauge size={14} /><span>Dynamic quality</span></button
+            >
+            <button
+              class:shadow-highlight={$editor.doc.settings.shadowHighlight}
+              aria-pressed={$editor.doc.settings.shadowHighlight}
+              title="Show projected shadows in solid yellow in every view"
+              aria-label="Highlight projected shadows"
+              onclick={() => setting({ shadowHighlight: !$editor.doc.settings.shadowHighlight })}
+              ><Highlighter size={14} /></button
+            >
             <button
               class:active={$editor.doc.settings.grid}
               title="Toggle grid"

@@ -13,6 +13,8 @@ test('native pixel preview follows resolution, remains independent per projector
     const e = (window as any).__TMP_VIEWPORT__
     return e && !e.state.recovering && e.transform.object
   })
+  await page.getByRole('button', { name: 'UV map', exact: true }).click()
+  await page.screenshot({ path: info.outputPath('uv-map.png') })
   await page.getByRole('button', { name: 'Color bars', exact: true }).click()
   const width = page.getByLabel('Native width', { exact: true })
   const height = page.getByLabel('Native height', { exact: true })
@@ -51,16 +53,19 @@ test('native pixel preview follows resolution, remains independent per projector
   await page.getByRole('button', { name: 'Grid', exact: true }).click()
   await page.getByLabel('Grid cell size', { exact: true }).fill('64')
   await page.getByLabel('Grid cell size', { exact: true }).press('Tab')
+  await page.getByRole('button', { name: 'UV map', exact: true }).click()
   await page.getByRole('button', { name: 'Add projector', exact: true }).click()
   await expect(preview).not.toBeChecked()
   await expect(page.getByLabel('Grid cell size', { exact: true })).toHaveValue('120')
   await page.getByRole('button', { name: 'Projector 01', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'UV map', exact: true })).toHaveClass(/active/)
   await expect(preview).toBeChecked()
   await expect(page.getByLabel('Grid cell size', { exact: true })).toHaveValue('64')
   const downloaded = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Save project', exact: true }).click()
   const file = info.outputPath('pixel-preview.tmp3d')
   await (await downloaded).saveAs(file)
+  await page.getByRole('button', { name: 'Grid', exact: true }).click()
   await preview.uncheck()
   await page.getByLabel('Grid cell size', { exact: true }).fill('120')
   await page.getByLabel('Grid cell size', { exact: true }).press('Tab')
@@ -70,11 +75,12 @@ test('native pixel preview follows resolution, remains independent per projector
   await expect(width).toHaveValue('320')
   await expect(height).toHaveValue('200')
   await expect(page.getByLabel('Grid cell size', { exact: true })).toHaveValue('64')
+  await expect(page.getByRole('button', { name: 'UV map', exact: true })).toHaveClass(/active/)
   await page.screenshot({ path: info.outputPath('native-pixel-preview.png') })
   expect(errors).toEqual([])
 })
 
-test('grid, checker and numbered patterns keep square pixel cells across landscape and portrait formats', async ({
+test('grid, checker, UV map and numbered patterns keep square pixel cells across landscape and portrait formats', async ({
   page
 }) => {
   await page.goto('/')
@@ -82,11 +88,13 @@ test('grid, checker and numbered patterns keep square pixel cells across landsca
   const results = await page.evaluate(async () => {
     const e = (window as any).__TMP_VIEWPORT__
     const { patternSamples } = await import('/tests/browser/pattern-fixture.ts' as string)
-    const update = (patch: Record<string, unknown>) => {
+    const update = async (patch: Record<string, unknown>) => {
       const doc = structuredClone(e.state.doc)
       Object.assign(doc.projectors[0], patch)
       e.state = { ...e.state, doc }
       e.sync()
+      // Allow generated labels to finish painting before sampling the media atlas.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     }
     const results = []
     for (const resolution of [
@@ -96,10 +104,10 @@ test('grid, checker and numbered patterns keep square pixel cells across landsca
       [768, 1024],
       [3840, 2160]
     ]) {
-      for (const pattern of ['grid', 'checker', 'alignment']) {
+      for (const pattern of ['grid', 'checker', 'uvmap', 'alignment']) {
         const p = e.state.doc.projectors[0]
         const cell = 120
-        update({
+        await update({
           spec: { ...p.spec, resolution },
           pattern,
           patternCellSize: cell,
@@ -133,7 +141,7 @@ test('grid, checker and numbered patterns keep square pixel cells across landsca
     }
     // Changing cell size changes spacing, rather than maintaining a fixed tile count.
     const p = e.state.doc.projectors[0]
-    update({ pattern: 'grid', patternCellSize: 64 })
+    await update({ pattern: 'grid', patternCellSize: 64 })
     results.push({
       resolution: p.spec.resolution,
       pattern: '64px grid',
@@ -147,6 +155,21 @@ test('grid, checker and numbered patterns keep square pixel cells across landsca
     return results
   })
   for (const result of results) {
+    if (result.pattern === 'uvmap') {
+      for (const color of [
+        result.samples[0],
+        result.samples[2],
+        ...result.vertical,
+        ...result.horizontal
+      ])
+        expect(Math.max(...color), `${result.resolution} UV grid line`).toBeLessThan(32)
+      for (const color of [result.samples[1], result.samples[3]]) {
+        expect(Math.max(...color), `${result.resolution} UV brightness`).toBeGreaterThan(200)
+        expect(Math.min(...color), `${result.resolution} UV saturation`).toBeLessThan(25)
+      }
+      expect(result.samples[1]).not.toEqual(result.samples[3])
+      continue
+    }
     expect(result.samples[0], `${result.resolution} ${result.pattern} vertical`).toEqual([
       230, 237, 223
     ])

@@ -5,6 +5,7 @@
     Copy,
     ChevronDown,
     ImagePlus,
+    Camera,
     Info,
     ScanLine,
     Sun,
@@ -12,6 +13,8 @@
     Move3D
   } from 'lucide-svelte'
   import NumberField from './NumberField.svelte'
+  import CameraSource from './CameraSource.svelte'
+  import ProjectorHeight from './ProjectorHeight.svelte'
   import MultiSelectionInspector from './MultiSelectionInspector.svelte'
   import { editor, editObject, commit, updateUI, setShift } from '../lib/store'
   import { projectorCatalogue, projectorForSpec, makeCustomSpec } from '../lib/catalogue'
@@ -399,10 +402,10 @@
       <section class="inspector-section">
         <h3><ImagePlus size={14} /> Projection source</h3>
         <div class="pattern-grid">
-          {#each [['grid', 'Grid'], ['checker', 'Checker'], ['crosshair', 'Crosshair'], ['alignment', 'Numbered'], ['bars', 'Color bars'], ['white', 'White']] as [key, name]}<button
+          {#each [['grid', 'Grid'], ['checker', 'Checker'], ['uvmap', 'UV map'], ['crosshair', 'Crosshair'], ['alignment', 'Numbered'], ['bars', 'Color bars'], ['white', 'White']] as [key, name]}<button
               class:active={p.pattern === key}
               onclick={() => editObject(p.id, { pattern: key as Pattern })}
-              ><span class="pattern-icon {key}"></span><span>{name}</span></button
+              ><span class="pattern-icon {key}" aria-hidden="true"></span><span>{name}</span></button
             >{/each}
         </div>
         <label class="check-row"
@@ -416,7 +419,7 @@
           Preview at {p.spec.resolution[0]} × {p.spec.resolution[1]} pixels. Zoom in to inspect edge detail
           and one-pixel grid lines.
         </p>
-        {#if ['grid', 'checker', 'alignment'].includes(p.pattern)}
+        {#if ['grid', 'checker', 'uvmap', 'alignment'].includes(p.pattern)}
           <NumberField
             label="Grid cell size"
             value={p.patternCellSize}
@@ -427,6 +430,9 @@
             oncommit={(v) => editObject(p.id, { patternCellSize: Math.round(v) })}
           />
           <p class="help">Square cells in projector pixels; edge cells may be cropped.</p>
+          {#if p.pattern === 'uvmap'}
+            <p class="help">Rows A, B, C from top to bottom; columns 1, 2, 3 from left to right.</p>
+          {/if}
         {/if}
         <input
           bind:this={imageInput}
@@ -440,9 +446,23 @@
             class="text-button"
             onclick={() => editObject(p.id, { pattern: 'image' })}
             >Use {$editor.doc.assets.find((a) => a.id === p.imageId)?.name}</button
-          ><label class="stack-label"
-            >Image fit<select
-              aria-label="Image fit"
+          >{/if}
+        <button
+          class="wide-button"
+          class:active={p.pattern === 'camera'}
+          onclick={() =>
+            editObject(p.id, {
+              pattern: 'camera',
+              camera: p.camera ?? { deviceId: '', label: 'Default camera' }
+            })}><Camera size={14} /> Camera / NDI</button
+        >
+        {#if p.pattern === 'camera' && engine}
+          <CameraSource projector={p} inputs={engine.projection.cameras} />
+        {/if}
+        {#if p.pattern === 'camera' || p.imageId}
+          <label class="stack-label"
+            >{p.pattern === 'camera' ? 'Camera fit' : 'Image fit'}<select
+              aria-label={p.pattern === 'camera' ? 'Camera fit' : 'Image fit'}
               value={p.imageFit}
               onchange={(e) =>
                 editObject(p.id, {
@@ -492,6 +512,7 @@
           ><Crosshair size={14} /> Aim at surface</button
         >{/if}
     </section>
+    {#if p}<ProjectorHeight projector={p} />{/if}
     {#if node}
       {#if node.kind === 'splat'}
         <section class="inspector-section">

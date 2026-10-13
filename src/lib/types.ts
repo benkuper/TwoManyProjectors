@@ -37,7 +37,8 @@ export interface SceneNode {
   assetId?: string
   dimensions: Vec3
 }
-export type Pattern = 'grid' | 'checker' | 'crosshair' | 'alignment' | 'bars' | 'white' | 'image'
+export type Pattern =
+  'grid' | 'checker' | 'uvmap' | 'crosshair' | 'alignment' | 'bars' | 'white' | 'image' | 'camera'
 export interface ProjectorSpec {
   id: string
   manufacturer: string
@@ -70,6 +71,8 @@ export interface ProjectorConfig {
   nativePixelPreview: boolean
   patternCellSize: number
   imageId?: string
+  /** Device preference only; live streams and permission are never persisted. */
+  camera?: { deviceId: string; label: string }
   imageFit: 'contain' | 'cover' | 'stretch'
   color: string
   showOutline: boolean
@@ -77,8 +80,43 @@ export interface ProjectorConfig {
   /** Legacy per-projector value, retained when reading older projects. */
   volumeOpacity?: number
   extent: number
+  /** Vertical lens-origin height, with a reference point in receiver-local coordinates. */
+  heightMeasurement?: {
+    visible: boolean
+    reference: { nodeId: string; point: Vec3 } | null
+  }
 }
-export type AnalysisMode = 'preview' | 'lux' | 'density' | 'distortion'
+export interface ProjectorVersion {
+  id: string
+  name: string
+  /** Inactive setup snapshot. The active version uses SceneDocument.projectors. */
+  projectors?: ProjectorConfig[]
+}
+export type AnalysisMode = 'preview' | 'lux' | 'density' | 'distortion' | 'overlap'
+export type LuxDisplay = 'smooth' | 'bands' | 'target'
+export const luxBandColors = [
+  '#3344a8',
+  '#2d75d8',
+  '#2ab7db',
+  '#30c7ab',
+  '#82d454',
+  '#e3df45',
+  '#f7a63c',
+  '#ef5a47'
+] as const
+export const luxTargetColors = ['#ff5a50', '#78e05c', '#b08aff'] as const
+/** Discrete, shared colors for zero through eight unoccluded projector footprints. */
+export const overlapColors = [
+  '#202838',
+  '#4d8fff',
+  '#20d6e0',
+  '#78e05c',
+  '#ffe044',
+  '#ff9f38',
+  '#ff5a50',
+  '#ec70e7',
+  '#b08aff'
+] as const
 export interface SceneDocument {
   format: 'TwoManyProjectors'
   version: 1
@@ -86,16 +124,24 @@ export interface SceneDocument {
   name: string
   nodes: SceneNode[]
   projectors: ProjectorConfig[]
+  /** Optional when reading projects created before setup versions were introduced. */
+  projectorVersions?: { activeId: string; items: ProjectorVersion[] }
   assets: AssetRecord[]
   settings: {
     materialResponse: boolean
     analysis: AnalysisMode
     analysisProjector: string | 'all'
     range: [number, number]
+    luxDisplay: LuxDisplay
+    luxTarget: [number, number]
     grid: boolean
+    dynamicRenderingQuality: boolean
     snap: boolean
     volumeOpacity: number
     outlineOpacity: number
+    /** Display-only contrast boost for projector occlusion in every analysis mode. */
+    shadowBoost: number
+    shadowHighlight: boolean
   }
   modified: string
 }
@@ -104,11 +150,19 @@ export interface AnalysisSample {
   normal: Vec3 | null
   confidence: 'mesh' | 'estimated' | 'unavailable'
   lux: number | null
+  overlap: number | null
   density: [number, number] | null
   millimetresPerPixel: [number, number] | null
   distortion: number | null
   luminance: number | null
-  projectors: { id: string; lux: number; occluded: boolean }[]
+  projectors: {
+    id: string
+    lux: number
+    occluded: boolean
+    density: [number, number] | null
+    millimetresPerPixel: [number, number] | null
+    distortion: number | null
+  }[]
 }
 export const identity = (): Transform => ({
   position: [0, 0, 0],

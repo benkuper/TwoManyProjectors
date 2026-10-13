@@ -59,6 +59,6 @@ test('CPU probes and GPU overlays agree, overlap adds, blockers occlude', async 
     }
   })
   expect(blocked.lux).toBe(0)
-  expect(blocked.gpu.slice(0, 3)).toEqual([0, 0, 128])
+  expect(blocked.gpu.slice(0, 3)).toEqual([20, 20, 20])
   await page.screenshot({ path: testInfo.outputPath('occlusion.png') })
 })

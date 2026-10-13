@@ -10,6 +10,7 @@ test('repeated drags retain learned scan detail without resizing an unchanged dr
     const e = (window as any).__TMP_VIEWPORT__
     return e && !e.state.recovering
   })
+  await page.getByRole('button', { name: 'Dynamic rendering quality', exact: true }).click()
   const result = await page.evaluate(() => {
     const e = (window as any).__TMP_VIEWPORT__,
       renderer = e.renderer,
@@ -78,6 +79,7 @@ test('projection and occlusion remain stable when manipulation restores full res
     const e = (window as any).__TMP_VIEWPORT__
     return e && !e.state.recovering && e.projection.projectors.length
   })
+  await page.getByRole('button', { name: 'Dynamic rendering quality', exact: true }).click()
   await page.getByRole('button', { name: 'Main screen', exact: true }).click()
   await page.getByLabel('Y rotation', { exact: true }).fill('5')
   await page.getByLabel('Y rotation', { exact: true }).press('Tab')
@@ -118,6 +120,7 @@ test('releasing a real gizmo drag preserves projection on a rotated plane', asyn
     const e = (window as any).__TMP_VIEWPORT__
     return e && !e.state.recovering && e.transform.object
   })
+  await page.getByRole('button', { name: 'Dynamic rendering quality', exact: true }).click()
   await page.getByRole('button', { name: 'Main screen', exact: true }).click()
   await page.getByLabel('Y rotation', { exact: true }).fill('5')
   await page.getByLabel('Y rotation', { exact: true }).press('Tab')
@@ -239,7 +242,9 @@ test('all eight depth-map tiles and blocker shadows are independent of preview r
       let hash = 2166136261
       for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619) >>> 0
       const projectors = Array.from({ length: 8 }, (_, i) => {
-        e.projection.uniforms.tmpSelected.value = i
+        e.projection.uniforms.tmpIncluded.value = Array.from({ length: 8 }, (_, j) =>
+          Number(i === j)
+        )
         return {
           visible: gpuSample(e, visible, normal),
           blocked: gpuSample(e, [0, 2.2, 0], normal)
@@ -254,7 +259,7 @@ test('all eight depth-map tiles and blocker shadows are independent of preview r
     expect(result.after).toEqual(result.before)
     for (const projector of result.projectors) {
       expect(projector.visible[1]).toBeGreaterThan(128)
-      expect(projector.blocked).toEqual([0, 0, 128, 255])
+      expect(projector.blocked).toEqual([20, 20, 20, 255])
     }
   }
 })

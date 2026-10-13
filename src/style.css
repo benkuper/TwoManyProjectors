@@ -329,6 +329,40 @@ p {
   display: flex;
   gap: 3px;
 }
+.projector-versions {
+  margin: 0 12px 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.version-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+  color: #818da0;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.8px;
+}
+.version-heading > div,
+.version-picker {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.version-picker select,
+.version-picker input {
+  flex: 1;
+  width: 0;
+  font-size: 11px;
+}
+.projector-versions p {
+  margin-top: 7px;
+  font-size: 9px;
+  color: var(--muted);
+}
 .scene-actions {
   display: flex;
   gap: 6px;
@@ -400,12 +434,45 @@ p {
   margin-top: 21px;
 }
 .tree-row {
+  position: relative;
   display: flex;
   align-items: center;
   border: 1px solid transparent;
   border-radius: 5px;
   min-height: 35px;
   margin-bottom: 2px;
+}
+.projector-reorder {
+  align-self: stretch;
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: #748398;
+  cursor: grab;
+  opacity: 0.55;
+}
+.tree-row:hover .projector-reorder,
+.projector-reorder:focus-visible {
+  opacity: 1;
+}
+.tree-row.projector-dragging {
+  opacity: 0.4;
+}
+.tree-row.drop-before::before,
+.tree-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.tree-row.drop-before::before {
+  top: -2px;
+}
+.tree-row.drop-after::after {
+  bottom: -2px;
 }
 .tree-row:hover {
   background: #252c36;
@@ -577,6 +644,95 @@ p {
   position: absolute !important;
   inset: 0;
 }
+.height-measurements {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+.height-dimension {
+  fill: none;
+  stroke: #a4dfff;
+  stroke-width: 1.5px;
+  filter: drop-shadow(0 1px 2px #10151e);
+}
+.height-extension,
+.height-guide {
+  opacity: 0.75;
+  stroke-width: 1px;
+}
+.height-guide {
+  stroke-dasharray: 5 4;
+}
+.height-origin-point {
+  fill: #a4dfff;
+}
+.height-reference-point {
+  fill: #182631;
+}
+.height-dimension-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: max-content;
+  max-width: 190px;
+  padding: 8px 11px;
+  border: 1px solid #6aa3c4;
+  border-radius: 5px;
+  background: #17232df2;
+  color: #d9f1ff;
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.height-dimension-label span {
+  max-width: 166px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.height-dimension-label strong {
+  font-size: 19px;
+  font-weight: 650;
+}
+.height-projector-name {
+  font-size: 10px;
+  color: #9dcbdf;
+}
+.height-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c8d5e4;
+  font-size: 11px;
+}
+.height-readout {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+  font-variant-numeric: tabular-nums;
+}
+.height-readout strong {
+  color: #a4dfff;
+  font-size: 20px;
+}
+.height-readout span {
+  color: #92a7bc;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.height-reference-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.height-reference-buttons .wide-button {
+  flex: 1 1 100px;
+  margin-top: 0;
+}
 .view-selector {
   display: flex;
   align-items: center;
@@ -716,6 +872,7 @@ p {
   left: 12px;
   right: 12px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 6px;
@@ -1026,6 +1183,22 @@ p {
 .pattern-icon.checker {
   background: conic-gradient(#b3c69a 25%, #263024 0 50%, #b3c69a 0 75%, #263024 0) 0 0/12px 12px;
 }
+.pattern-icon.uvmap {
+  position: relative;
+  background:
+    repeating-conic-gradient(#0000 0 25%, #0003 0 50%) 0 0/12px 12px,
+    linear-gradient(90deg, #ff3055, #ffdd00, #20ff62, #00dfff, #8050ff);
+}
+.pattern-icon.uvmap::after {
+  content: 'A1';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font: bold 10px monospace;
+  text-shadow: 0 1px 2px #000, 0 -1px 2px #000;
+}
 .pattern-icon.crosshair {
   background:
     linear-gradient(0deg, transparent 45%, #b8d697 45% 55%, transparent 55%),
@@ -1188,7 +1361,7 @@ p {
 }
 .legend-card {
   right: 20px;
-  bottom: 65px;
+  bottom: 105px;
   width: 245px;
 }
 .heat-gradient {
@@ -1200,8 +1373,62 @@ p {
 .legend-card .field-grid {
   margin-top: 9px;
 }
+.lux-display-control {
+  margin-top: 10px;
+}
+.lux-band-legend {
+  display: flex;
+  gap: 2px;
+  margin-top: 15px;
+}
+.lux-band-legend > div {
+  flex: 1;
+  height: 12px;
+  border-radius: 2px;
+}
+.lux-target-legend {
+  display: grid;
+  gap: 7px;
+  margin-top: 15px;
+  font-size: 10px;
+  color: #c8d5e4;
+}
+.lux-target-legend > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lux-target-legend i {
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid #ffffff30;
+}
 .legend-card .help {
   font-size: 8px;
+}
+.overlap-legend {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 3px;
+  margin-top: 15px;
+}
+.overlap-legend > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+}
+.overlap-legend i {
+  width: 100%;
+  height: 12px;
+  border: 1px solid #ffffff30;
+  border-radius: 2px;
+}
+.viewport-toggles button.shadow-highlight {
+  color: #ffff00;
+  background: #ffff0020;
 }
 .legend-card .stack-label {
   font-size: 9px;
@@ -1211,7 +1438,7 @@ p {
 }
 .probe-card {
   left: 20px;
-  bottom: 65px;
+  bottom: 105px;
   width: 275px;
 }
 .sample-main {
@@ -1245,6 +1472,28 @@ p {
 .probe-card dd {
   margin: 0;
   color: #bdcedf;
+}
+.probe-projectors {
+  margin-top: 10px;
+  font-size: 10px;
+}
+.probe-projectors summary {
+  cursor: pointer;
+  margin-bottom: 5px;
+}
+.probe-projectors dl {
+  max-height: 160px;
+  overflow-y: auto;
+}
+.probe-projectors dt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+.probe-projectors dd {
+  flex-shrink: 0;
 }
 .instruction-chip {
   position: absolute;

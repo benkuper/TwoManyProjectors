@@ -7,6 +7,23 @@ import { catalogue, customSpec, makeCustomSpec, projectorForSpec } from '../src/
 import { constrainShift } from '../src/lib/optics'
 
 describe('versioned scene documents', () => {
+  it('defaults dynamic rendering quality off and preserves the saved preference', () => {
+    expect(sampleDocument().settings.dynamicRenderingQuality).toBe(false)
+    const legacy = JSON.parse(JSON.stringify(sampleDocument()))
+    delete legacy.settings.dynamicRenderingQuality
+    expect(validateDocument(legacy).settings.dynamicRenderingQuality).toBe(false)
+    for (const dynamicRenderingQuality of [false, true]) {
+      const doc = sampleDocument()
+      doc.settings.dynamicRenderingQuality = dynamicRenderingQuality
+      expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    }
+    for (const dynamicRenderingQuality of [null, 1, 'true', {}]) {
+      const invalid = JSON.parse(JSON.stringify(sampleDocument()))
+      invalid.settings.dynamicRenderingQuality = dynamicRenderingQuality
+      expect(() => validateDocument(invalid)).toThrow('invalid analysis settings')
+    }
+  })
+
   it('preserves per-object locks and defaults older documents to unlocked', () => {
     const doc = sampleDocument()
     doc.nodes[0].locked = true
@@ -51,6 +68,58 @@ describe('versioned scene documents', () => {
     expect(validateDocument(JSON.parse(JSON.stringify(d)))).toEqual(d)
     expect(() => validateDocument({ ...d, version: 2 })).toThrow('unsupported')
   })
+  it('migrates lux display settings and preserves chosen targets', () => {
+    const legacy = JSON.parse(JSON.stringify(sampleDocument()))
+    delete legacy.settings.luxDisplay
+    delete legacy.settings.luxTarget
+    const migrated = validateDocument(legacy)
+    expect(migrated.settings.luxDisplay).toBe('smooth')
+    expect(migrated.settings.luxTarget).toEqual([80, 120])
+    for (const luxDisplay of ['smooth', 'bands', 'target'] as const) {
+      migrated.settings.luxDisplay = luxDisplay
+      migrated.settings.luxTarget = [100, 250]
+      expect(validateDocument(JSON.parse(JSON.stringify(migrated)))).toEqual(migrated)
+    }
+  })
+  it('rejects malformed lux display modes and target ranges', () => {
+    for (const luxDisplay of ['unknown', 1, null]) {
+      const invalid = JSON.parse(JSON.stringify(sampleDocument()))
+      invalid.settings.luxDisplay = luxDisplay
+      expect(() => validateDocument(invalid)).toThrow('lux display settings')
+    }
+    for (const luxTarget of [null, [80], [-1, 120], [120, 80], [80, 80], [0, Infinity], ['80', 120]]) {
+      const invalid = structuredClone(sampleDocument())
+      Object.assign(invalid.settings, { luxTarget })
+      expect(() => validateDocument(invalid)).toThrow('lux display settings')
+    }
+  })
+  it('defaults legacy shadow boost to 1 and preserves customized values', () => {
+    const legacy = JSON.parse(JSON.stringify(sampleDocument()))
+    delete legacy.settings.shadowBoost
+    delete legacy.settings.shadowHighlight
+    const migrated = validateDocument(legacy)
+    expect(migrated.settings.shadowBoost).toBe(1)
+    expect(migrated.settings.shadowHighlight).toBe(false)
+    for (const shadowBoost of [1, 2.5, 10]) {
+      const doc = sampleDocument()
+      doc.settings.shadowBoost = shadowBoost
+      doc.settings.shadowHighlight = true
+      doc.settings.analysis = 'overlap'
+      expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    }
+  })
+  it('rejects malformed or out-of-range shadow boosts', () => {
+    for (const shadowBoost of [0, 0.9, 10.1, NaN, Infinity, '2', null]) {
+      const doc = JSON.parse(JSON.stringify(sampleDocument()))
+      doc.settings.shadowBoost = shadowBoost
+      expect(() => validateDocument(doc)).toThrow('invalid shadow boost')
+    }
+    for (const shadowHighlight of [null, 1, 'true']) {
+      const doc = JSON.parse(JSON.stringify(sampleDocument()))
+      doc.settings.shadowHighlight = shadowHighlight
+      expect(() => validateDocument(doc)).toThrow('invalid shadow highlight')
+    }
+  })
   it('migrates pattern preview options and preserves customized pixel settings', () => {
     const legacy = JSON.parse(JSON.stringify(sampleDocument()))
     delete legacy.projectors[0].nativePixelPreview
@@ -61,6 +130,26 @@ describe('versioned scene documents', () => {
     migrated.projectors[0].nativePixelPreview = true
     migrated.projectors[0].patternCellSize = 64
     expect(validateDocument(JSON.parse(JSON.stringify(migrated)))).toEqual(migrated)
+  })
+  it('round-trips camera preferences and rejects malformed media settings', () => {
+    const doc = sampleDocument()
+    doc.projectors[0].pattern = 'camera'
+    doc.projectors[0].camera = { deviceId: 'ndi-video', label: 'NDI Video' }
+    doc.projectors[0].imageFit = 'cover'
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    for (const camera of [
+      null,
+      'ndi-video',
+      {},
+      { deviceId: 1, label: 'NDI' },
+      { deviceId: 'ndi' }
+    ]) {
+      const invalid = structuredClone(doc)
+      Object.assign(invalid.projectors[0], { camera })
+      expect(() => validateDocument(invalid)).toThrow('invalid camera preference')
+    }
+    Object.assign(doc.projectors[0], { imageFit: 'wrong' })
+    expect(() => validateDocument(doc)).toThrow('invalid projection media fit')
   })
   it('restores custom lens limits in older preset copies without changing native specifications', () => {
     const doc = sampleDocument(),
