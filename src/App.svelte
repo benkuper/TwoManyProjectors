@@ -29,6 +29,7 @@
     Move3D,
     Plus,
     Redo2,
+    RefreshCw,
     Rotate3D,
     Ruler,
     Save,
@@ -66,7 +67,7 @@
     duplicateSelected,
     updateUI
   } from './lib/store'
-  import { importFiles, cancelImport, addAssetToScene } from './lib/assets'
+  import { importFiles, cancelImport, addAssetToScene, replaceAsset } from './lib/assets'
   import {
     autosave,
     createProject,
@@ -89,8 +90,10 @@
   import type { ViewportEngine } from './lib/engine'
   let engine = $state.raw<ViewportEngine>(),
     assetInput: HTMLInputElement,
+    replacementAssetInput: HTMLInputElement,
     projectInput: HTMLInputElement,
     projectExplorer: ProjectExplorer
+  let replacementAssetId: string | undefined
   let showImport = $state(false),
     showHelp = $state(false),
     showAdd = $state(false),
@@ -164,6 +167,13 @@
     showImport = false
     await importFiles(pendingFiles, units, up, flipAxes)
     pendingFiles = []
+  }
+  async function replaceAssetFiles(event: Event) {
+    const input = event.currentTarget as HTMLInputElement,
+      files = Array.from(input.files ?? []),
+      id = replacementAssetId
+    input.value = ''
+    if (id && files.length) await replaceAsset(id, files)
   }
   function drop(event: DragEvent) {
     event.preventDefault()
@@ -608,6 +618,17 @@
                     aria-label={`Add ${a.name} to scene`}
                     title="Add to scene"
                     onclick={() => addAssetToScene(a.id)}><Plus size={13} /></button
+                  >
+                  <button
+                    class="icon-button small"
+                    aria-label={`Replace ${a.name}`}
+                    title="Replace asset in all scene instances · Keep transforms and surface settings"
+                    disabled={$editor.busy !== null ||
+                      $editor.doc.nodes.some((n) => n.assetId === a.id && n.locked)}
+                    onclick={() => {
+                      replacementAssetId = a.id
+                      replacementAssetInput.click()
+                    }}><RefreshCw size={13} /></button
                   >{/if}
                 <button
                   class="icon-button small"
@@ -1140,7 +1161,16 @@
   class="hidden"
   aria-label="Import asset files"
   onchange={chooseFiles}
-/><input
+/>
+<input
+  bind:this={replacementAssetInput}
+  type="file"
+  multiple
+  hidden
+  aria-label="Replacement asset files"
+  onchange={replaceAssetFiles}
+/>
+<input
   bind:this={projectInput}
   type="file"
   accept=".tmp3d"

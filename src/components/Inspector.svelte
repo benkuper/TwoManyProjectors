@@ -10,7 +10,6 @@
     ScanLine,
     Sun,
     SlidersHorizontal,
-    RefreshCw,
     Move3D
   } from 'lucide-svelte'
   import NumberField from './NumberField.svelte'
@@ -29,7 +28,7 @@
     type Pattern
   } from '../lib/types'
   import { constrainShift, footprint } from '../lib/optics'
-  import { importImage, importTexture, replaceMesh } from '../lib/assets'
+  import { importImage, importTexture } from '../lib/assets'
   import type { ViewportEngine } from '../lib/engine'
   let { engine }: { engine: ViewportEngine | undefined } = $props()
   const object = $derived(
@@ -53,10 +52,8 @@
   )
   let imageInput = $state<HTMLInputElement>(),
     textureInput = $state<HTMLInputElement>(),
-    replacementInput = $state<HTMLInputElement>(),
     lumens = $state<number | null>(null),
     calculating = $state(false)
-  let replacementTarget: string | undefined
   $effect(() => {
     const id = object?.id
     lumens = null
@@ -160,13 +157,6 @@
         updateUI({ error: (e as Error).message })
       }
     input.value = ''
-  }
-  async function replacement(event: Event) {
-    const input = event.currentTarget as HTMLInputElement,
-      files = Array.from(input.files ?? []),
-      id = replacementTarget
-    input.value = ''
-    if (id && files.length) await replaceMesh(id, files)
   }
 </script>
 
@@ -591,28 +581,6 @@
             {asset.units === 'auto' ? 'Automatic file units' : `Imported in ${asset.units}`},
             {asset.upAxis.toUpperCase()} up. Original size preserved.
           </p>
-          {#if node.kind === 'mesh'}
-            <button
-              class="wide-button"
-              disabled={node.locked || $editor.busy !== null}
-              onclick={() => {
-                replacementTarget = node.id
-                replacementInput?.click()
-              }}><RefreshCw size={14} /> Replace mesh</button
-            >
-            <input
-              type="file"
-              multiple
-              hidden
-              bind:this={replacementInput}
-              aria-label="Replacement mesh files"
-              onchange={replacement}
-            />
-            <p class="help">
-              Keeps placement, surface settings and import axes. Select the updated model with its
-              companion files.
-            </p>
-          {/if}
           <button
             class="wide-button"
             onclick={() =>

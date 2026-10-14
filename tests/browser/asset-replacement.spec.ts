@@ -12,7 +12,7 @@ async function ready(page: Page) {
   await page.getByLabel('Up axis', { exact: true }).selectOption('z')
   await page.getByLabel('Flip X axis', { exact: true }).check()
   await page.getByRole('button', { name: 'Import 1 file', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Replace mesh', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Replace mesh.ply', exact: true })).toBeVisible()
 }
 
 const snapshot = (page: Page) =>
@@ -38,8 +38,9 @@ const snapshot = (page: Page) =>
   })
 
 async function replace(page: Page, files: string[]) {
+  const { asset } = await snapshot(page)
   const choosing = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: 'Replace mesh', exact: true }).click()
+  await page.getByRole('button', { name: `Replace ${asset.name}`, exact: true }).click()
   await (await choosing).setFiles(files.map(sample))
   await expect(page.locator('.busy-toast')).toHaveCount(0)
 }
@@ -70,10 +71,11 @@ test('replacement preserves identity, placement, appearance and import axes with
   await expect(page.getByLabel('Surface texture', { exact: true })).not.toHaveValue('')
   const before = await snapshot(page)
   await replace(page, ['two-tone.glb'])
-  await expect(page.getByText('Replaced mesh · Undo to restore', { exact: true })).toBeVisible()
+  await expect(page.getByText('Replaced asset · Undo to restore', { exact: true })).toBeVisible()
   const after = await snapshot(page)
-  expect(after.node.assetId).not.toBe(before.node.assetId)
-  expect(after.node).toEqual({ ...before.node, assetId: after.node.assetId })
+  expect(after.node).toEqual(before.node)
+  expect(after.asset.id).toBe(before.asset.id)
+  expect(after.asset.primary).not.toBe(before.asset.primary)
   expect(after.asset).toMatchObject({
     name: 'two-tone.glb',
     units: 'cm',
@@ -119,7 +121,7 @@ test('replacement preserves identity, placement, appearance and import axes with
   expect(errors).toEqual([])
 })
 
-test('replacing one instance leaves its copies unchanged and can load companion files', async ({
+test('replacing a library asset updates all instances and can load companion files', async ({
   page
 }) => {
   await ready(page)
@@ -128,19 +130,23 @@ test('replacing one instance leaves its copies unchanged and can load companion 
   const copy = await snapshot(page)
   await replace(page, ['triangle.obj', 'triangle.mtl', 'white.png'])
   const replaced = await snapshot(page)
-  expect(replaced.node).toEqual({ ...copy.node, assetId: replaced.node.assetId })
+  expect(replaced.node).toEqual(copy.node)
   expect(replaced.asset.files).toHaveLength(3)
   expect(replaced.asset.name).toBe('triangle.obj')
   await page.getByRole('button', { name: 'mesh', exact: true }).click()
   const unchanged = await snapshot(page)
   expect(unchanged.node).toEqual(original.node)
+  expect(unchanged.asset).toEqual(replaced.asset)
   expect(unchanged.vertices).toBe(original.vertices)
   await page.getByLabel('Undo', { exact: true }).click()
   await page.getByRole('button', { name: 'mesh copy', exact: true }).click()
   expect((await snapshot(page)).node).toEqual(copy.node)
+  expect((await snapshot(page)).asset).toEqual(original.asset)
 })
 
-test('failed and non-mesh replacements preserve the model and undo history', async ({ page }) => {
+test('failed and incompatible replacements preserve the asset and undo history', async ({
+  page
+}) => {
   await ready(page)
   const before = await snapshot(page),
     revision = await page.evaluate(() => (window as any).__TMP_VIEWPORT__.state.revision)
@@ -148,7 +154,7 @@ test('failed and non-mesh replacements preserve the model and undo history', asy
     [['malformed.ply'], 'Invalid PLY header'],
     [['two-tone.fbx'], 'Missing companion file'],
     [['gaussian.ply'], 'Replacement must be a mesh'],
-    [['triangle.glb', 'two-tone.glb'], 'Choose one replacement mesh']
+    [['triangle.glb', 'two-tone.glb'], 'Choose one replacement asset']
   ] as const) {
     await replace(page, [...files])
     await expect(page.locator('.error-toast')).toContainText(error)
@@ -159,5 +165,104 @@ test('failed and non-mesh replacements preserve the model and undo history', asy
   }
   await replace(page, ['two-tone.glb'])
   await expect(page.locator('.error-toast')).toHaveCount(0)
+  expect((await snapshot(page)).vertices).toBe(6)
+})
+
+for (const name of ['gaussian.ply', 'cloud.ply']) {
+  test(`library replaces ${name} with a new version of the same filename for every instance`, async ({
+    page
+  }, info) => {
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto('/')
+    await page.getByLabel('Import asset files').setInputFiles(sample(name))
+    await page.getByRole('button', { name: 'Import 1 file', exact: true }).click()
+    await expect(page.getByLabel(`Replace ${name}`, { exact: true })).toBeVisible()
+    await page.getByLabel('X', { exact: true }).fill('3')
+    await page.getByLabel('X', { exact: true }).press('Tab')
+    if (name === 'gaussian.ply') {
+      await page.getByLabel('Splat size', { exact: true }).fill('1.8')
+      await page.getByLabel('Splat size', { exact: true }).press('Tab')
+    }
+    await page.getByRole('button', { name: name.replace('.ply', ''), exact: true }).click()
+    await page.keyboard.press('Control+d')
+    await page.getByLabel('X', { exact: true }).fill('8')
+    await page.getByLabel('X', { exact: true }).press('Tab')
+    const read = () =>
+      page.evaluate(async () => {
+        const { runtimeAssets } = await import('/src/lib/assets.ts' as string),
+          e = (window as any).__TMP_VIEWPORT__,
+          record = e.state.doc.assets[0],
+          asset = runtimeAssets.get(record.id),
+          nodes = e.state.doc.nodes.filter((n: any) => n.assetId === record.id),
+          geometry = asset.proxy?.geometry ?? asset.root.children[0].geometry
+        return {
+          record,
+          nodes,
+          root: asset.root.uuid,
+          minX: geometry.boundingBox.min.x,
+          sourcesMatch: nodes.every((n: any) => {
+            const runtime = e.nodes.get(n.id)
+            return (
+              runtime.key.includes(asset.root.uuid) &&
+              (!runtime.splat ||
+                runtime.splat.mesh.packedSplats === asset.root.children[0].packedSplats)
+            )
+          })
+        }
+      })
+    const before = await read(),
+      text = await readFile(sample(name), 'utf8'),
+      updated = Buffer.from(text.replace('-1.0 1.0 0', '-2.0 1.0 0'))
+    expect(before.nodes).toHaveLength(2)
+    await page.screenshot({ path: info.outputPath('asset-library-replace.png') })
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByLabel(`Replace ${name}`, { exact: true }).click()
+    await (await chooser).setFiles({ name, mimeType: 'application/octet-stream', buffer: updated })
+    await expect(page.getByText('Replaced asset · Undo to restore', { exact: true })).toBeVisible()
+    const after = await read()
+    expect(after.nodes).toEqual(before.nodes)
+    expect(after.record.id).toBe(before.record.id)
+    expect(after.record.name).toBe(name)
+    expect(after.record.primary).not.toBe(before.record.primary)
+    expect(after.root).not.toBe(before.root)
+    expect(after.sourcesMatch).toBe(true)
+    expect(after.minX).toBe(-2)
+    await expect(page.locator('.asset-row')).toHaveCount(1)
+    await page.getByLabel('Undo', { exact: true }).click()
+    expect(await read()).toEqual(before)
+    await page.getByLabel('Redo', { exact: true }).click()
+    expect(await read()).toEqual(after)
+    await page.evaluate(async () => {
+      const { autosave } = await import('/src/lib/persistence.ts' as string)
+      await autosave()
+    })
+    await page.reload()
+    await expect(page.getByLabel(`Replace ${name}`, { exact: true })).toBeVisible()
+    const restored = await read()
+    expect(restored.record).toEqual(after.record)
+    expect(restored.nodes).toEqual(after.nodes)
+    expect(restored.minX).toBe(-2)
+    expect(restored.sourcesMatch).toBe(true)
+    expect(errors).toEqual([])
+  })
+}
+
+test('library replacement works without scene instances and blocks locked instances', async ({
+  page
+}) => {
+  await ready(page)
+  await page.getByLabel('Lock mesh', { exact: true }).click()
+  await expect(page.getByLabel('Replace mesh.ply', { exact: true })).toBeDisabled()
+  await page.getByLabel('Unlock mesh', { exact: true }).click()
+  await page.getByRole('button', { name: 'mesh', exact: true }).click()
+  await page.keyboard.press('Delete')
+  await expect(page.getByLabel('Replace mesh.ply', { exact: true })).toBeEnabled()
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByLabel('Replace mesh.ply', { exact: true }).click()
+  await (await chooser).setFiles(sample('two-tone.glb'))
+  await expect(page.getByLabel('Replace two-tone.glb', { exact: true })).toBeVisible()
+  await expect(page.locator('.scene-list .receivers small')).toHaveText('3')
+  await page.getByLabel('Add two-tone.glb to scene', { exact: true }).click()
   expect((await snapshot(page)).vertices).toBe(6)
 })

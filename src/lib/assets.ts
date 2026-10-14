@@ -27,7 +27,7 @@ import { SplatMesh } from '@sparkjsdev/spark'
 import { classifyPLY, binaryGaussianPLY } from './formats'
 export { classifyPLY } from './formats'
 import { get } from 'svelte/store'
-import type { AssetKind, AssetRecord, SceneNode, Vec3 } from './types'
+import type { AssetKind, AssetRecord, SceneDocument, SceneNode, Vec3 } from './types'
 import { identity, materials } from './types'
 import { commit, editor, endEdit, select, uid, updateUI } from './store'
 
@@ -40,6 +40,16 @@ export interface RuntimeAsset {
 }
 export const runtimeAssets = new Map<string, RuntimeAsset>()
 export const originalFiles = new Map<string, File>()
+let previousDocument: SceneDocument | undefined
+// Revision paths retain source data for Undo while the public asset ID stays unchanged.
+editor.subscribe(({ doc }) => {
+  if (doc === previousDocument) return
+  previousDocument = doc
+  for (const record of doc.assets) {
+    const revision = runtimeAssets.get(record.primary)
+    if (revision) runtimeAssets.set(record.id, revision)
+  }
+})
 function assetNode(record: AssetRecord): SceneNode {
   if (record.kind === 'image') throw new Error('Projection images cannot be added as receivers.')
   return {
@@ -76,6 +86,16 @@ export function addAssetToScene(assetId: string, point?: Vec3) {
   updateUI({ tool: 'translate', frame: Date.now() })
 }
 const meshes = new Set(['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply', 'pcd', 'xyz', 'splat', 'spz'])
+async function modelKind(file: File): Promise<AssetKind> {
+  const ext = file.name.split('.').pop()!.toLowerCase()
+  return ext === 'ply'
+    ? classifyPLY(await file.slice(0, 65536).arrayBuffer())
+    : ext === 'pcd' || ext === 'xyz'
+      ? 'cloud'
+      : ext === 'splat' || ext === 'spz'
+        ? 'splat'
+        : 'mesh'
+}
 export function validateGeometry(g: BufferGeometry) {
   const pos = g.getAttribute('position')
   if (!pos?.count) throw new Error('This asset contains no positions.')
@@ -408,14 +428,7 @@ export async function importFiles(
         ext = file.name.split('.').pop()!.toLowerCase(),
         id = uid()
       updateUI({ busy: (i + 0.1) / primaries.length, busyText: `Importing ${file.name}…` })
-      const kind: AssetKind =
-        ext === 'ply'
-          ? classifyPLY(await file.arrayBuffer())
-          : ext === 'pcd' || ext === 'xyz'
-            ? 'cloud'
-            : ext === 'splat' || ext === 'spz'
-              ? 'splat'
-              : 'mesh'
+      const kind = await modelKind(file)
       const companions = ext === 'obj' || ext === 'gltf' || ext === 'fbx' ? input : [file]
       const paths = companions.map((f) => `assets/${id}/${f.webkitRelativePath || f.name}`)
       companions.forEach((f, j) => fileMap.set(paths[j], f))
@@ -459,35 +472,32 @@ export function importImage(file: File, projectorId: string) {
 export function importTexture(file: File, nodeId: string) {
   return importImageFor(file, nodeId, true)
 }
-export async function replaceMesh(nodeId: string, input: File[]) {
+export async function replaceAsset(assetId: string, input: File[]) {
   const state = get(editor),
-    node = state.doc.nodes.find((n) => n.id === nodeId),
-    source = state.doc.assets.find((a) => a.id === node?.assetId)
-  if (controller || !node || node.locked || node.kind !== 'mesh' || source?.kind !== 'mesh') return
+    source = state.doc.assets.find((a) => a.id === assetId)
+  if (controller || !source || source.kind === 'image') return
+  if (state.doc.nodes.some((n) => n.assetId === assetId && n.locked))
+    return updateUI({ notice: `Unlock all instances before replacing ${source.name}.` })
   controller = new AbortController()
-  updateUI({ busy: 0.05, busyText: 'Loading replacement mesh…', error: '' })
+  updateUI({ busy: 0.05, busyText: 'Loading replacement asset…', error: '' })
   let runtime: RuntimeAsset | undefined
   try {
     const primaries = input.filter((f) => meshes.has(f.name.split('.').pop()!.toLowerCase()))
     if (primaries.length !== 1)
       throw new Error(
-        'Choose one replacement mesh with its companion textures, MTL and buffer files.'
+        'Choose one replacement asset with its companion textures, MTL and buffer files.'
       )
     const file = primaries[0],
       ext = file.name.split('.').pop()!.toLowerCase()
-    if (
-      !['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply'].includes(ext) ||
-      (ext === 'ply' && classifyPLY(await file.arrayBuffer()) !== 'mesh')
-    )
-      throw new Error('Replacement must be a mesh: GLB, glTF, FBX, OBJ, STL or mesh PLY.')
-    const id = uid(),
+    if ((await modelKind(file)) !== source.kind)
+      throw new Error(`Replacement must be a ${source.kind}, matching the original asset.`)
+    const folder = `assets/${assetId}/${uid()}`,
       companions = ['obj', 'gltf', 'fbx'].includes(ext) ? input : [file],
-      files = new Map(companions.map((f) => [`assets/${id}/${f.webkitRelativePath || f.name}`, f])),
+      files = new Map(companions.map((f) => [`${folder}/${f.webkitRelativePath || f.name}`, f])),
       record: AssetRecord = {
         ...structuredClone(source),
-        id,
         name: file.name,
-        primary: `assets/${id}/${file.webkitRelativePath || file.name}`,
+        primary: `${folder}/${file.webkitRelativePath || file.name}`,
         files: [...files.keys()],
         normals: 'unavailable',
         originalBytes: companions.reduce((n, f) => n + f.size, 0)
@@ -495,27 +505,24 @@ export async function replaceMesh(nodeId: string, input: File[]) {
     runtime = await loadAsset(record, files, controller.signal)
     controller.signal.throwIfAborted()
     const current = get(editor),
-      target = current.doc.nodes.find((n) => n.id === nodeId)
-    // Loading may finish after changing projects, deleting/locking the object, or replacing its asset.
+      target = current.doc.assets.find((a) => a.id === assetId)
+    // Loading may finish after switching projects, deleting the asset or locking an instance.
     if (
       current.documentGeneration !== state.documentGeneration ||
       !target ||
-      target.locked ||
-      target.kind !== 'mesh' ||
-      target.assetId !== source.id
+      target.primary !== source.primary ||
+      current.doc.nodes.some((n) => n.assetId === assetId && n.locked)
     ) {
       runtime.dispose()
       return
     }
     endEdit()
-    runtimeAssets.set(id, runtime)
+    const original = runtimeAssets.get(assetId)
+    if (original) runtimeAssets.set(source.primary, original)
+    runtimeAssets.set(record.primary, runtime)
     for (const [path, file] of files) originalFiles.set(path, file)
-    commit('Replaced mesh · Undo to restore', (d) => {
-      d.assets.push(record)
-      d.nodes.find((n) => n.id === nodeId)!.assetId = id
-      // Other instances keep their original mesh. Unused source data stays cached for Undo.
-      if (!d.nodes.some((n) => n.assetId === source.id))
-        d.assets = d.assets.filter((a) => a.id !== source.id)
+    commit('Replaced asset · Undo to restore', (d) => {
+      d.assets[d.assets.findIndex((a) => a.id === assetId)] = record
     })
     updateUI({ calibration: [], calibrationPreview: null, probe: null })
   } catch (e) {

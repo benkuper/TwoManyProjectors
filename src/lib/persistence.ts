@@ -317,7 +317,7 @@ export async function hydrate(doc: SceneDocument, files: Map<string, File>) {
     throw e
   }
   // Do not discard the existing document until all new assets have loaded.
-  const previous = [...runtimeAssets.values()]
+  const previous = [...new Set(runtimeAssets.values())]
   runtimeAssets.clear()
   originalFiles.clear()
   for (const [key, value] of staged) runtimeAssets.set(key, value)
