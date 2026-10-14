@@ -35,7 +35,7 @@ import {
   type Material
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { TransformControls } from 'three/addons/controls/TransformControls.js'
+import { EditorTransformControls } from './transform-controls'
 import { acceleratedRaycast } from 'three-mesh-bvh'
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
 import { get, writable } from 'svelte/store'
@@ -105,7 +105,7 @@ const defaultSplatScale = 0.4
 
 export class ViewportEngine {
   controls: OrbitControls
-  transform: TransformControls
+  transform: EditorTransformControls
   projection = new ProjectionSystem()
   depthScene = new Scene()
   nodes = new Map<string, RuntimeNode>()
@@ -163,7 +163,7 @@ export class ViewportEngine {
     this.controls.mouseButtons.MIDDLE = MOUSE.PAN
     this.controls.mouseButtons.RIGHT = MOUSE.DOLLY
     this.controls.update()
-    this.transform = new TransformControls(camera, renderer.domElement)
+    this.transform = new EditorTransformControls(camera, renderer.domElement)
     this.transform.setSize(0.85)
     layers(this.transform.getHelper(), 2)
     this.transform.getRaycaster().layers.set(2)

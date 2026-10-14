@@ -9,6 +9,10 @@ export interface Transform {
 export interface SurfaceMaterial {
   preset: 'white' | 'concrete' | 'metal' | 'glass' | 'captured'
   color: string
+  /** Appearance multiplier in linear light, applied before projection shading. */
+  colorBoost?: number
+  /** Ignore imported material colors, vertex colors and base-color textures. */
+  forceUniformColor?: boolean
   reflectance: number
   roughness: number
   transmission: number
@@ -21,6 +25,8 @@ export interface AssetRecord {
   primary: string
   units: 'auto' | 'm' | 'cm' | 'mm' | 'ft'
   upAxis: 'y' | 'z'
+  /** Reflect source X/Y/Z axes before converting the up axis. */
+  flipAxes?: [boolean, boolean, boolean]
   normals: 'imported' | 'estimated' | 'unavailable'
   originalBytes: number
 }

@@ -87,6 +87,9 @@ export function validateDocument(value: unknown): SceneDocument {
     if (
       !m ||
       !/^#[\da-f]{6}$/i.test(m.color) ||
+      (m.colorBoost !== undefined &&
+        (!finite(m.colorBoost) || m.colorBoost < 0 || m.colorBoost > 10)) ||
+      (m.forceUniformColor !== undefined && typeof m.forceUniformColor !== 'boolean') ||
       ![m.reflectance, m.roughness, m.transmission].every((v) => finite(v) && v >= 0 && v <= 1)
     )
       fail('invalid surface material')
@@ -172,7 +175,11 @@ export function validateDocument(value: unknown): SceneDocument {
       !Array.isArray(a.files) ||
       !a.files.includes(a.primary) ||
       !['auto', 'm', 'cm', 'mm', 'ft'].includes(a.units) ||
-      !['y', 'z'].includes(a.upAxis)
+      !['y', 'z'].includes(a.upAxis) ||
+      (a.flipAxes !== undefined &&
+        (!Array.isArray(a.flipAxes) ||
+          a.flipAxes.length !== 3 ||
+          a.flipAxes.some((v) => typeof v !== 'boolean')))
     )
       fail('invalid asset')
     for (const path of a.files)

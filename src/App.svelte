@@ -97,6 +97,7 @@
     pendingFiles = $state<File[]>([]),
     units = $state<AssetRecord['units']>('auto'),
     up = $state<AssetRecord['upAxis']>('y'),
+    flipAxes = $state<[boolean, boolean, boolean]>([false, false, false]),
     dragging = $state(false)
   const assetDragType = 'application/x-twomanyprojectors-asset'
   const projectorDragType = 'application/x-twomanyprojectors-projector'
@@ -161,7 +162,7 @@
   }
   async function doImport() {
     showImport = false
-    await importFiles(pendingFiles, units, up)
+    await importFiles(pendingFiles, units, up, flipAxes)
     pendingFiles = []
   }
   function drop(event: DragEvent) {
@@ -1177,17 +1178,25 @@
       </div>
       <div class="field-grid">
         <label class="stack-label"
-          >File units<select bind:value={units}
+          >File units<select aria-label="File units" bind:value={units}
             ><option value="auto">Automatic · file units</option><option value="m">Metres</option
             ><option value="cm">Centimetres</option><option value="mm">Millimetres</option
             ><option value="ft">Feet</option></select
           ></label
         ><label class="stack-label"
-          >Up axis<select bind:value={up}
+          >Up axis<select aria-label="Up axis" bind:value={up}
             ><option value="y">Y up</option><option value="z">Z up</option></select
           ></label
         >
       </div>
+      <div class="field-grid" style:grid-template-columns="repeat(3, 1fr)">
+        {#each ['X', 'Y', 'Z'] as axis, i}
+          <label class="check-row"
+            ><input type="checkbox" bind:checked={flipAxes[i]} /> Flip {axis} axis</label
+          >
+        {/each}
+      </div>
+      <p class="help">Flips use the source axes, before the up-axis conversion.</p>
       <div class="modal-actions">
         <button class="quiet-button" onclick={() => (showImport = false)}>Cancel</button><button
           class="save-button"

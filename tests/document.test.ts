@@ -7,6 +7,51 @@ import { catalogue, customSpec, makeCustomSpec, projectorForSpec } from '../src/
 import { constrainShift } from '../src/lib/optics'
 
 describe('versioned scene documents', () => {
+  it('preserves mesh appearance and source-axis flips, while accepting older projects', () => {
+    const doc = sampleDocument()
+    doc.nodes[0].material.colorBoost = 2.5
+    doc.nodes[0].material.forceUniformColor = true
+    doc.assets.push({
+      id: 'mesh',
+      name: 'mesh.ply',
+      kind: 'mesh',
+      files: ['assets/mesh/mesh.ply'],
+      primary: 'assets/mesh/mesh.ply',
+      units: 'cm',
+      upAxis: 'z',
+      flipAxes: [true, false, true],
+      normals: 'imported',
+      originalBytes: 100
+    })
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    const legacy = structuredClone(doc)
+    delete legacy.nodes[0].material.colorBoost
+    delete legacy.nodes[0].material.forceUniformColor
+    delete legacy.assets[0].flipAxes
+    expect(validateDocument(legacy)).toEqual(legacy)
+    for (const colorBoost of [null, -1, 11, Infinity, '2']) {
+      const invalid = structuredClone(doc)
+      Object.assign(invalid.nodes[0].material, { colorBoost })
+      expect(() => validateDocument(invalid)).toThrow('invalid surface material')
+    }
+    for (const forceUniformColor of [null, 1, 'true']) {
+      const invalid = structuredClone(doc)
+      Object.assign(invalid.nodes[0].material, { forceUniformColor })
+      expect(() => validateDocument(invalid)).toThrow('invalid surface material')
+    }
+    for (const flipAxes of [
+      null,
+      [],
+      [true, false],
+      [true, false, false, false],
+      [1, false, false]
+    ]) {
+      const invalid = structuredClone(doc)
+      Object.assign(invalid.assets[0], { flipAxes })
+      expect(() => validateDocument(invalid)).toThrow('invalid asset')
+    }
+  })
+
   it('round trips mesh texture references and rejects missing or non-image textures', () => {
     const doc = sampleDocument()
     doc.assets.push({

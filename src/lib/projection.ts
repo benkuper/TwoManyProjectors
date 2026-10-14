@@ -596,6 +596,14 @@ export class ProjectionSystem {
       material.color.set(surface.color)
       material.vertexColors = false
     }
+    if (surface.forceUniformColor) {
+      material.color.set(surface.color)
+      material.map = null
+      material.vertexColors = false
+      material.emissiveMap = null
+      material.emissive.set(0)
+    }
+    material.color.multiplyScalar(surface.colorBoost ?? 1)
     material.side = DoubleSide
     const reflectance = { value: surface.reflectance },
       transmission = { value: surface.transmission }

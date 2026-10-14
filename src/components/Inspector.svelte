@@ -620,9 +620,29 @@
           /></label
         >
         {#if ['plane', 'box', 'cylinder', 'mesh'].includes(node.kind)}
+          <NumberField
+            label="Color boost"
+            value={node.material.colorBoost ?? 1}
+            min={0}
+            max={10}
+            step={0.1}
+            suffix="×"
+            oncommit={(v) => material({ colorBoost: v })}
+          />
+          <label class="check-row">
+            <input
+              type="checkbox"
+              checked={node.material.forceUniformColor ?? false}
+              onchange={(e) => material({ forceUniformColor: e.currentTarget.checked })}
+            /> Force uniform color
+          </label>
+          <p class="help">
+            Use the surface color across the mesh, ignoring original colors and textures.
+          </p>
           <label class="stack-label">
             Texture<select
               aria-label="Surface texture"
+              disabled={node.material.forceUniformColor ?? false}
               value={node.textureId ?? ''}
               onchange={(e) =>
                 editObject(
@@ -637,8 +657,10 @@
               {/each}
             </select>
           </label>
-          <button class="wide-button" onclick={() => textureInput?.click()}
-            ><ImagePlus size={14} /> Import texture</button
+          <button
+            class="wide-button"
+            disabled={node.material.forceUniformColor ?? false}
+            onclick={() => textureInput?.click()}><ImagePlus size={14} /> Import texture</button
           >
           <input
             type="file"

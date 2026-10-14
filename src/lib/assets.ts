@@ -351,7 +351,7 @@ export async function loadAsset(
         ? sourceScale
         : { m: 1, cm: 0.01, mm: 0.001, ft: 0.3048 }[record.units]
     if (!Number.isFinite(scale) || scale <= 0) throw new Error('Invalid model unit scale.')
-    wrapper.scale.setScalar(scale)
+    wrapper.scale.set(...([0, 1, 2].map((i) => (record.flipAxes?.[i] ? -scale : scale)) as Vec3))
     wrapper.updateMatrixWorld(true)
     return {
       record,
@@ -387,7 +387,8 @@ export function cancelImport() {
 export async function importFiles(
   input: File[],
   units: AssetRecord['units'] = 'auto',
-  upAxis: AssetRecord['upAxis'] = 'y'
+  upAxis: AssetRecord['upAxis'] = 'y',
+  flipAxes: NonNullable<AssetRecord['flipAxes']> = [false, false, false]
 ) {
   if (controller) return
   controller = new AbortController()
@@ -426,6 +427,7 @@ export async function importFiles(
         primary: `assets/${id}/${file.webkitRelativePath || file.name}`,
         units,
         upAxis,
+        flipAxes: [...flipAxes],
         normals: 'unavailable',
         originalBytes: companions.reduce((n, f) => n + f.size, 0)
       }
