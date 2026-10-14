@@ -29,7 +29,7 @@ export { classifyPLY } from './formats'
 import { get } from 'svelte/store'
 import type { AssetKind, AssetRecord, SceneNode, Vec3 } from './types'
 import { identity, materials } from './types'
-import { commit, editor, select, uid, updateUI } from './store'
+import { commit, editor, endEdit, select, uid, updateUI } from './store'
 
 export interface RuntimeAsset {
   record: AssetRecord
@@ -458,6 +458,73 @@ export function importImage(file: File, projectorId: string) {
 }
 export function importTexture(file: File, nodeId: string) {
   return importImageFor(file, nodeId, true)
+}
+export async function replaceMesh(nodeId: string, input: File[]) {
+  const state = get(editor),
+    node = state.doc.nodes.find((n) => n.id === nodeId),
+    source = state.doc.assets.find((a) => a.id === node?.assetId)
+  if (controller || !node || node.locked || node.kind !== 'mesh' || source?.kind !== 'mesh') return
+  controller = new AbortController()
+  updateUI({ busy: 0.05, busyText: 'Loading replacement mesh…', error: '' })
+  let runtime: RuntimeAsset | undefined
+  try {
+    const primaries = input.filter((f) => meshes.has(f.name.split('.').pop()!.toLowerCase()))
+    if (primaries.length !== 1)
+      throw new Error(
+        'Choose one replacement mesh with its companion textures, MTL and buffer files.'
+      )
+    const file = primaries[0],
+      ext = file.name.split('.').pop()!.toLowerCase()
+    if (
+      !['glb', 'gltf', 'fbx', 'obj', 'stl', 'ply'].includes(ext) ||
+      (ext === 'ply' && classifyPLY(await file.arrayBuffer()) !== 'mesh')
+    )
+      throw new Error('Replacement must be a mesh: GLB, glTF, FBX, OBJ, STL or mesh PLY.')
+    const id = uid(),
+      companions = ['obj', 'gltf', 'fbx'].includes(ext) ? input : [file],
+      files = new Map(companions.map((f) => [`assets/${id}/${f.webkitRelativePath || f.name}`, f])),
+      record: AssetRecord = {
+        ...structuredClone(source),
+        id,
+        name: file.name,
+        primary: `assets/${id}/${file.webkitRelativePath || file.name}`,
+        files: [...files.keys()],
+        normals: 'unavailable',
+        originalBytes: companions.reduce((n, f) => n + f.size, 0)
+      }
+    runtime = await loadAsset(record, files, controller.signal)
+    controller.signal.throwIfAborted()
+    const current = get(editor),
+      target = current.doc.nodes.find((n) => n.id === nodeId)
+    // Loading may finish after changing projects, deleting/locking the object, or replacing its asset.
+    if (
+      current.documentGeneration !== state.documentGeneration ||
+      !target ||
+      target.locked ||
+      target.kind !== 'mesh' ||
+      target.assetId !== source.id
+    ) {
+      runtime.dispose()
+      return
+    }
+    endEdit()
+    runtimeAssets.set(id, runtime)
+    for (const [path, file] of files) originalFiles.set(path, file)
+    commit('Replaced mesh · Undo to restore', (d) => {
+      d.assets.push(record)
+      d.nodes.find((n) => n.id === nodeId)!.assetId = id
+      // Other instances keep their original mesh. Unused source data stays cached for Undo.
+      if (!d.nodes.some((n) => n.assetId === source.id))
+        d.assets = d.assets.filter((a) => a.id !== source.id)
+    })
+    updateUI({ calibration: [], calibrationPreview: null, probe: null })
+  } catch (e) {
+    runtime?.dispose()
+    updateUI({ error: e instanceof Error ? e.message : String(e) })
+  } finally {
+    controller = null
+    updateUI({ busy: null, busyText: '' })
+  }
 }
 async function importImageFor(file: File, targetId: string, surface: boolean) {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type))
