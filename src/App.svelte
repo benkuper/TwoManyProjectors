@@ -728,7 +728,7 @@
       </div>
       <details class="viewport-shading floating-card">
         <summary>
-          <Sun size={14} /> Mesh shading
+          <Sun size={14} /> View shading
           <span>{$editor.doc.settings.viewShading === 'directional'
               ? 'Directional'
               : $editor.doc.settings.viewShading === 'none'
@@ -773,7 +773,9 @@
             />
             <p class="help">World direction: 0° azimuth is +Z, 90° is +X. Elevation points upward.</p>
           {/if}
-          <p class="help">Mesh preview lighting. Projector measurements and analysis stay the same.</p>
+          <p class="help">
+            Mesh and Gaussian preview lighting. Projector measurements and analysis stay the same.
+          </p>
         </div>
       </details>
       {#if $editor.tool === 'aim'}<div class="instruction-chip">

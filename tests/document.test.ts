@@ -156,6 +156,8 @@ describe('versioned scene documents', () => {
     expect(validateDocument(structuredClone(doc))).toEqual(doc)
     doc.nodes[0].gaussian = { opacity: 2.5, size: 1.8 }
     expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
+    doc.nodes[0].gaussian = { opacity: 2.5, size: 1.8, brightness: 3, contrast: 0.75 }
+    expect(validateDocument(JSON.parse(JSON.stringify(doc)))).toEqual(doc)
     for (const gaussian of [
       { opacity: -1, size: 1 },
       { opacity: 5.1, size: 1 },
@@ -167,6 +169,18 @@ describe('versioned scene documents', () => {
       const invalid = structuredClone(doc)
       invalid.nodes[0].gaussian = gaussian
       expect(() => validateDocument(invalid)).toThrow('Gaussian rendering')
+    }
+    for (const field of ['brightness', 'contrast']) {
+      for (const value of [-1, 5.1, NaN, Infinity, null, '2']) {
+        const invalid = structuredClone(doc)
+        Object.assign(invalid.nodes[0].gaussian!, { [field]: value })
+        expect(() => validateDocument(invalid)).toThrow('Gaussian rendering')
+      }
+      for (const value of [0, 1, 5]) {
+        const valid = structuredClone(doc)
+        Object.assign(valid.nodes[0].gaussian!, { [field]: value })
+        expect(validateDocument(valid)).toEqual(valid)
+      }
     }
   })
   it('validates a complete sample and rejects unsupported versions', () => {

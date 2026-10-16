@@ -25,6 +25,7 @@ import {
   luxBandColors,
   luxTargetColors,
   overlapColors,
+  type GaussianRendering,
   type ProjectorConfig,
   type SceneDocument,
   type SurfaceMaterial
@@ -211,7 +212,7 @@ vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmiss
  vec3 color=tmpResponse?base*(ambient+contribution*reflectance*(1.-transmission)):vec3(ambient*.5)+contribution;
  return tmpShadowView(color,blockedLight,dot(contribution+blockedContribution,luminance),shadowed);
 }
-// Captured clouds and splats already contain lighting; keep their ambient response.
+// Point clouds retain their captured lighting.
 vec3 tmpShade(vec3 point,vec3 normal,vec3 base,float reflectance,float transmission,float confidence) {
  return tmpShade(point,normal,base,reflectance,transmission,confidence,.09);
 }
@@ -665,10 +666,16 @@ void main(){
 }`
     })
   }
-  splatUniforms(surface: SurfaceMaterial, size = 1) {
+  splatUniforms(
+    surface: SurfaceMaterial,
+    { size = 1, brightness = 1, contrast = 1 }: Partial<GaussianRendering> = {}
+  ) {
     return {
       tmpSplatSize: { value: size },
       tmpSplatBase: { value: new Color(surface.color) },
+      tmpSplatBrightness: { value: brightness * (surface.colorBoost ?? 1) },
+      tmpSplatContrast: { value: contrast },
+      tmpSplatUniformColor: { value: surface.forceUniformColor ?? false },
       tmpSplatReflectance: { value: surface.reflectance },
       tmpSplatTransmission: { value: surface.transmission }
     }
@@ -687,6 +694,9 @@ void main(){
           `
 uniform float tmpSplatSize;
 uniform vec3 tmpSplatBase;
+uniform float tmpSplatBrightness;
+uniform float tmpSplatContrast;
+uniform bool tmpSplatUniformColor;
 uniform float tmpSplatReflectance;
 uniform float tmpSplatTransmission;
 vec3 tmpSplatToLinear(vec3 c) {
@@ -706,7 +716,12 @@ vec3 tmpSplatToSRGB(vec3 c) {
           `vec3 tmpAxis = tmpS.x < tmpS.y && tmpS.x < tmpS.z ? vec3(1,0,0) : tmpS.y < tmpS.z ? vec3(0,1,0) : vec3(0,0,1);`,
           `vec4 tmpQ = ${inputs.gsplat}.quaternion;`,
           `vec3 tmpN = tmpAxis + 2.0*cross(tmpQ.xyz,cross(tmpQ.xyz,tmpAxis)+tmpQ.w*tmpAxis);`,
-          `${outputs.gsplat}.rgba.rgb = tmpSplatToSRGB(tmpShade(${inputs.gsplat}.center,tmpN,tmpSplatBase*tmpSplatToLinear(${inputs.gsplat}.rgba.rgb),tmpSplatReflectance,tmpSplatTransmission,min(tmpS.x,min(tmpS.y,tmpS.z))/max(tmpS.x,max(tmpS.y,tmpS.z)) < .35 ? 1. : 0.));`
+          // Covariance axes have no front/back orientation. Light both sides of a splat,
+          // retaining the original normal for projector analysis.
+          `float tmpAmbient = tmpMeshAmbient(dot(tmpN,tmpLightDirection)<0. ? -tmpN : tmpN);`,
+          `vec3 tmpCaptured = tmpSplatUniformColor ? vec3(1.) : max((${inputs.gsplat}.rgba.rgb-.5)*tmpSplatContrast+.5,vec3(0.));`,
+          `vec3 tmpBase = tmpSplatBase*tmpSplatToLinear(tmpCaptured)*tmpSplatBrightness;`,
+          `${outputs.gsplat}.rgba.rgb = tmpSplatToSRGB(tmpShade(${inputs.gsplat}.center,tmpN,tmpBase,tmpSplatReflectance,tmpSplatTransmission,min(tmpS.x,min(tmpS.y,tmpS.z))/max(1e-12,max(tmpS.x,max(tmpS.y,tmpS.z))) < .35 ? 1. : 0.,tmpAmbient));`
         ]
       })
     })

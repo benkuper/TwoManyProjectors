@@ -103,7 +103,9 @@ test('Gaussian splats retain visible ambient light through Spark color conversio
   )
   const pixel = await page.evaluate(async () => {
     const { splatAmbientSample } = await import('/tests/browser/spark-fixture.ts' as string)
-    return splatAmbientSample((window as any).__TMP_VIEWPORT__)
+    const e = (window as any).__TMP_VIEWPORT__
+    e.projection.uniforms.tmpViewShading.value = 2
+    return splatAmbientSample(e)
   })
   // 9% ambient in linear light, rather than 9% sRGB (which becomes almost black).
   for (const channel of pixel.slice(0, 3)) expect(channel).toBeCloseTo(0.09 * 255, 0)

@@ -25,6 +25,7 @@
     type SceneNode,
     type Vec3,
     type SurfaceMaterial,
+    type GaussianRendering,
     type Pattern
   } from '../lib/types'
   import { constrainShift, footprint } from '../lib/optics'
@@ -126,6 +127,9 @@
   }
   function material(patch: Partial<SurfaceMaterial>) {
     if (node) editObject(node.id, { material: { ...node.material, ...patch } })
+  }
+  function gaussian(patch: Partial<GaussianRendering>) {
+    if (node) editObject(node.id, { gaussian: { opacity: 1, size: 1, ...node.gaussian, ...patch } })
   }
   async function image(event: Event) {
     const f = (event.target as HTMLInputElement).files?.[0]
@@ -530,6 +534,51 @@
       {#if node.kind === 'splat'}
         <section class="inspector-section">
           <h3><SlidersHorizontal size={14} /> Gaussian rendering</h3>
+          <label class="color-row">
+            Splat color<input
+              aria-label="Splat color"
+              type="color"
+              value={node.material.color}
+              oninput={(e) => material({ color: e.currentTarget.value })}
+            />
+          </label>
+          <label class="check-row">
+            <input
+              type="checkbox"
+              checked={node.material.forceUniformColor ?? false}
+              onchange={(e) => material({ forceUniformColor: e.currentTarget.checked })}
+            /> Uniform splat color
+          </label>
+          <p class="help">Tint captured colors, or enable uniform color to replace them.</p>
+          <NumberField
+            label="Splat brightness"
+            value={node.gaussian?.brightness ?? 1}
+            min={0}
+            max={5}
+            step={0.05}
+            suffix="×"
+            slider
+            oncommit={(brightness) => gaussian({ brightness })}
+          />
+          <NumberField
+            label="Splat contrast"
+            value={node.gaussian?.contrast ?? 1}
+            disabled={node.material.forceUniformColor ?? false}
+            min={0}
+            max={5}
+            step={0.05}
+            suffix="×"
+            slider
+            oncommit={(contrast) => gaussian({ contrast })}
+          />
+          <button
+            class="wide-button"
+            onclick={() =>
+              editObject(node.id, {
+                gaussian: { opacity: 1, size: 1, ...node.gaussian, brightness: 1, contrast: 1 },
+                material: { ...node.material, color: '#ffffff', colorBoost: 1, forceUniformColor: false }
+              })}>Reset splat colors</button
+          >
           <NumberField
             label="Splat opacity"
             value={node.gaussian?.opacity ?? 1}
@@ -538,8 +587,7 @@
             step={0.05}
             suffix="×"
             slider
-            oncommit={(opacity) =>
-              editObject(node.id, { gaussian: { size: node.gaussian?.size ?? 1, opacity } })}
+            oncommit={(opacity) => gaussian({ opacity })}
           />
           <NumberField
             label="Splat size"
@@ -549,12 +597,12 @@
             step={0.05}
             suffix="×"
             slider
-            oncommit={(size) =>
-              editObject(node.id, { gaussian: { opacity: node.gaussian?.opacity ?? 1, size } })}
+            oncommit={(size) => gaussian({ size })}
           />
           <p class="help">
-            Increase size to fill gaps and opacity to strengthen faint splats. 1× uses the original
-            appearance. These controls leave scan dimensions and measurements unchanged.
+            Brightness and contrast adjust preview colors before lighting. Increase size to fill
+            gaps and opacity to strengthen faint splats. 1× preserves each original setting.
+            Scan dimensions and measurements stay the same.
           </p>
         </section>
       {/if}
@@ -611,14 +659,17 @@
                     : key[0].toUpperCase() + key.slice(1)}</option
               >{/each}</select
           ></label
-        ><label class="color-row"
-          >Surface color<input
-            aria-label="Surface color"
-            type="color"
-            value={node.material.color}
-            oninput={(e) => material({ color: e.currentTarget.value })}
-          /></label
         >
+        {#if node.kind !== 'splat'}
+          <label class="color-row"
+            >Surface color<input
+              aria-label="Surface color"
+              type="color"
+              value={node.material.color}
+              oninput={(e) => material({ color: e.currentTarget.value })}
+            /></label
+          >
+        {/if}
         {#if ['plane', 'box', 'cylinder', 'mesh'].includes(node.kind)}
           <NumberField
             label="Color boost"

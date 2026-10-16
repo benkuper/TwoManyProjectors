@@ -1,7 +1,7 @@
 import { PackedSplats, SplatMesh, SparkRenderer, writeSpz } from '@sparkjsdev/spark'
 import { Vector3, Quaternion, Color, Scene, PerspectiveCamera, WebGLRenderTarget } from 'three'
 import type { ViewportEngine } from '../../src/lib/engine'
-import { materials } from '../../src/lib/types'
+import { materials, type SurfaceMaterial } from '../../src/lib/types'
 
 // Exercise Spark's real generator and output conversion, reading linear RGB like the mesh fixture.
 export async function splatAmbientSample(
@@ -10,6 +10,11 @@ export async function splatAmbientSample(
     size = 1,
     opacity = 1,
     sourceOpacity = 1,
+    sourceColor = [1, 1, 1],
+    surface = materials.captured,
+    brightness = 1,
+    contrast = 1,
+    rotation = 0,
     offset = 0,
     projected = false,
     point = [0, 0, 0]
@@ -17,6 +22,11 @@ export async function splatAmbientSample(
     size?: number
     opacity?: number
     sourceOpacity?: number
+    sourceColor?: [number, number, number]
+    surface?: SurfaceMaterial
+    brightness?: number
+    contrast?: number
+    rotation?: number
     offset?: number
     projected?: boolean
     point?: [number, number, number]
@@ -40,16 +50,17 @@ export async function splatAmbientSample(
     new Vector3(0.5, 0.5, 0.05),
     new Quaternion(),
     sourceOpacity,
-    new Color(1, 1, 1)
+    new Color(...sourceColor)
   )
-  const appearance = engine.projection.splatUniforms(materials.captured, size)
+  const appearance = engine.projection.splatUniforms(surface, { size, brightness, contrast })
   const mesh = new SplatMesh({
       packedSplats: splats,
-      worldModifier: engine.projection.splatModifier(materials.captured, appearance)
+      worldModifier: engine.projection.splatModifier(surface, appearance)
     }),
     spark = new SparkRenderer({ renderer, autoUpdate: false })
   scene.add(mesh, spark)
   mesh.opacity = opacity
+  mesh.rotation.y = rotation
   try {
     if (!projected) {
       uniforms.tmpCount.value = 0

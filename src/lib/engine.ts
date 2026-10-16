@@ -499,7 +499,7 @@ export class ViewportEngine {
         root = new Group()
         root.rotation.copy(asset.root.rotation)
         root.scale.copy(asset.root.scale)
-        const uniforms = this.projection.splatUniforms(node.material, node.gaussian?.size ?? 1)
+        const uniforms = this.projection.splatUniforms(node.material, node.gaussian)
         const splat = new SplatMesh({
           packedSplats: originalSplat.packedSplats,
           splatEncoding: originalSplat.packedSplats?.splatEncoding,
@@ -625,16 +625,25 @@ export class ViewportEngine {
         const { mesh, uniforms } = runtime.splat,
           size = node.gaussian?.size ?? 1,
           opacity = node.gaussian?.opacity ?? 1,
+          brightness = (node.gaussian?.brightness ?? 1) * (node.material.colorBoost ?? 1),
+          contrast = node.gaussian?.contrast ?? 1,
+          uniformColor = node.material.forceUniformColor ?? false,
           color = new Color(node.material.color)
         if (
           uniforms.tmpSplatSize.value !== size ||
           mesh.opacity !== opacity ||
           !uniforms.tmpSplatBase.value.equals(color) ||
+          uniforms.tmpSplatBrightness.value !== brightness ||
+          uniforms.tmpSplatContrast.value !== contrast ||
+          uniforms.tmpSplatUniformColor.value !== uniformColor ||
           uniforms.tmpSplatReflectance.value !== node.material.reflectance ||
           uniforms.tmpSplatTransmission.value !== node.material.transmission
         ) {
           uniforms.tmpSplatSize.value = size
           uniforms.tmpSplatBase.value.copy(color)
+          uniforms.tmpSplatBrightness.value = brightness
+          uniforms.tmpSplatContrast.value = contrast
+          uniforms.tmpSplatUniformColor.value = uniformColor
           uniforms.tmpSplatReflectance.value = node.material.reflectance
           uniforms.tmpSplatTransmission.value = node.material.transmission
           mesh.opacity = opacity

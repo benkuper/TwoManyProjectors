@@ -39,11 +39,19 @@ export interface SceneNode {
   locked: boolean
   material: SurfaceMaterial
   /** Display multipliers; do not change the scan's geometry or analysis. */
-  gaussian?: { opacity: number; size: number }
+  gaussian?: GaussianRendering
   assetId?: string
   /** Optional image asset overriding the mesh's base-color texture. */
   textureId?: string
   dimensions: Vec3
+}
+export interface GaussianRendering {
+  opacity: number
+  size: number
+  /** Linear-light gain for captured colors before projection shading. Defaults to 1. */
+  brightness?: number
+  /** Contrast around sRGB mid-gray before projection shading. Defaults to 1. */
+  contrast?: number
 }
 export type Pattern =
   'grid' | 'checker' | 'uvmap' | 'crosshair' | 'alignment' | 'bars' | 'white' | 'image' | 'camera'

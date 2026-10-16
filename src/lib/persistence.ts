@@ -80,7 +80,11 @@ export function validateDocument(value: unknown): SceneDocument {
         n.gaussian.opacity > 5 ||
         !finite(n.gaussian.size) ||
         n.gaussian.size < 0.1 ||
-        n.gaussian.size > 5)
+        n.gaussian.size > 5 ||
+        (n.gaussian.brightness !== undefined &&
+          (!finite(n.gaussian.brightness) || n.gaussian.brightness < 0 || n.gaussian.brightness > 5)) ||
+        (n.gaussian.contrast !== undefined &&
+          (!finite(n.gaussian.contrast) || n.gaussian.contrast < 0 || n.gaussian.contrast > 5)))
     )
       fail('invalid Gaussian rendering options')
     const m = n.material
